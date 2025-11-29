@@ -6,11 +6,13 @@ export default async function handler(req, res) {
     if (!input) {
       return res.status(400).json({ error: "Missing 'input' in request body" });
     }
-
+    console.log("starting");
     let record;
     if (input.startsWith("http")) {
+      console.log("linked");
       record = await parseReplayFromReplayLink(input);
     } else {
+      console.log("uuid");
       record = await parseReplayFromUUID(input);
     }
 
