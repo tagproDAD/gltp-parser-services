@@ -1,28 +1,19 @@
-import { parseReplayFromUUID } from "../lib/replayParser.js";
-import { validateInput, normalizeReplayUrl } from "../lib/validation.js";
-import { formatShortSummary } from "../lib/format.js";
+import { parseReplayFromUUID, parseReplayFromReplayLink } from "../lib/replayParser.js";
 
 export default async function handler(req, res) {
   try {
-    console.log("Starting:");
     const { input, origin } = req.body || {};
-    if (!input) return res.status(400).json({ error: "Missing input" });
-
-    const rawInput = String(input).trim();
-    const type = validateInput(rawInput);
+    if (!input) {
+      return res.status(400).json({ error: "Missing 'input' in request body" });
+    }
 
     let record;
-    if (type === "replay") {
-      console.log("yes:");
-      const normalized = normalizeReplayUrl(rawInput);
-      record = await parseReplayFromReplayLink(normalized);
-    } else if (type === "uuid") {
-      console.log("2:");
-      record = await parseReplayFromUUID(rawInput);
+    if (input.startsWith("http")) {
+      record = await parseReplayFromReplayLink(input);
     } else {
-      return res.status(400).json({ error: "Input not recognized" });
+      record = await parseReplayFromUUID(input);
     }
-    console.log(record);
+
     if (!record) {
       return res.status(400).json({ error: "No valid cap found" });
     }
@@ -30,10 +21,9 @@ export default async function handler(req, res) {
     record.origin = origin || "vercel";
     record.timestamp_uploaded = Date.now();
 
-    const summary = formatShortSummary(record);
-
-    return res.status(200).json({ ok: true, summary, record });
+    return res.status(200).json({ ok: true, record });
   } catch (err) {
+    console.error("Parse error:", err);
     return res.status(500).json({ error: err.message });
   }
 }
