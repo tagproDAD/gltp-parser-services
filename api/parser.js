@@ -35,7 +35,7 @@ export default async function handler(req, res) {
       // UUID → direct replay file
       replayUrl = `https://tagpro.koalabeast.com/replays/${rawInput}.json`;
     }
-    replayUrl = "https://tagpro.koalabeast.com/replays?uuid=627815a4-363a-4e49-85be-fe6bd8205c35";
+    replayUrl = "https://tagpro.koalabeast.com/replays/gameFile?gameId=6928bfaaabec5ffe0abba28f";
 
     // --- Fetch replay ---
     const replayRes = await fetch(replayUrl, { headers: { "Accept": "application/json" } });
