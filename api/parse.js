@@ -4,6 +4,7 @@ import { formatShortSummary } from "../lib/format.js";
 
 export default async function handler(req, res) {
   try {
+    console.log("Starting:");
     const { input, origin } = req.body || {};
     if (!input) return res.status(400).json({ error: "Missing input" });
 
@@ -12,14 +13,16 @@ export default async function handler(req, res) {
 
     let record;
     if (type === "replay") {
+      console.log("yes:");
       const normalized = normalizeReplayUrl(rawInput);
       record = await parseReplayFromReplayLink(normalized);
     } else if (type === "uuid") {
+      console.log("2:");
       record = await parseReplayFromUUID(rawInput);
     } else {
       return res.status(400).json({ error: "Input not recognized" });
     }
-
+    console.log(record);
     if (!record) {
       return res.status(400).json({ error: "No valid cap found" });
     }
