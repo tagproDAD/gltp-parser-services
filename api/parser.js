@@ -6,61 +6,44 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: "Missing 'input' in request body" });
     }
 
-    const rawInput = String(input).trim();
-
-    // --- Validation (same as Worker) ---
-    const validPrefix = "https://tagpro.koalabeast.com/";
-    let type = "invalid";
-    if (rawInput.startsWith(validPrefix)) {
-      if (rawInput.includes("replay=")) type = "replay";
-      if (rawInput.includes("uuid=")) type = "uuid";
-    }
+    const uuid = String(input).trim();
     const uuidRegex = /^[0-9a-f-]{36}$/i;
-    if (uuidRegex.test(rawInput)) type = "uuid";
-
-    if (type === "invalid") {
-      return res.status(400).json({ error: "Input not recognized as replay link or UUID" });
+    if (!uuidRegex.test(uuid)) {
+      return res.status(400).json({ error: "Input must be a valid UUID" });
     }
 
-    // --- Normalize replay URL ---
-    let replayUrl;
-    if (type === "replay") {
-      if (rawInput.includes("game?replay=")) {
-        const id = new URL(rawInput).searchParams.get("replay");
-        replayUrl = `https://tagpro.koalabeast.com/replays/gameFile?key=${id}`;
-      } else {
-        replayUrl = rawInput;
-      }
-    } else if (type === "uuid") {
-      // UUID → direct replay file
-      replayUrl = `https://tagpro.koalabeast.com/replays/${rawInput}.json`;
+    // Step 1: Fetch metadata
+    const metadataRes = await fetch(`https://tagpro.koalabeast.com/replays/data?uuid=${uuid}`);
+    if (!metadataRes.ok) {
+      return res.status(500).json({ error: "Failed to fetch metadata" });
     }
-    replayUrl = "https://tagpro.koalabeast.com/replays/gameFile?gameId=6928bfaaabec5ffe0abba28f";
+    const metadata = await metadataRes.json();
+    if (!metadata.games || metadata.games.length !== 1) {
+      return res.status(500).json({ error: "Unexpected replay format" });
+    }
 
-    // --- Fetch replay ---
-    const replayRes = await fetch(replayUrl, { headers: { "Accept": "application/json" } });
+    // Step 2: Fetch replay file
+    const gameId = metadata.games[0].id;
+    const replayRes = await fetch(`https://tagpro.koalabeast.com/replays/gameFile?gameId=${gameId}`);
     if (!replayRes.ok) {
-      return res.status(500).json({ error: `Failed to fetch replay: ${replayRes.status}` });
+      return res.status(500).json({ error: "Failed to fetch replay data" });
     }
-    const replay = await replayRes.json();
 
-    // --- Minimal parsing (mirror Worker’s record object) ---
-    // NOTE: Adjust fields based on what your replay JSON actually contains
+    // Step 3: Parse replay lines
+    const text = await replayRes.text();
+    const lines = text.trim().split("\n").map(line => JSON.parse(line));
+
+    // Step 4: Build record object (similar to Worker)
     const record = {
-      uuid: rawInput,
-      map: replay.map?.name || null,
-      players: replay.players?.map(p => ({
-        name: p.name,
-        team: p.team,
-        score: p.score,
-      })) || [],
-      caps: replay.caps || [],
+      uuid,
+      gameId,
       origin: origin || "vercel",
       timestamp_uploaded: Date.now(),
+      // You can enrich this with map/players/caps if you parse them from `lines`
+      events: lines,
     };
 
-    // Short summary (like Worker’s formatShortSummary)
-    const summary = `Map: ${record.map}, Caps: ${record.caps.length}, Players: ${record.players.length}`;
+    const summary = `Replay ${uuid} with ${lines.length} events`;
 
     return res.status(200).json({
       ok: true,
