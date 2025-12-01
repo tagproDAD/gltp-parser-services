@@ -61,7 +61,7 @@ export default {
         }
 
         const record = parsed.record;
-        record.origin = body.origin || "worker";
+        record.origin = body.origin || "cloudflare";
         record.timestamp_uploaded = Date.now();
 
         const summary = formatShortSummary(record);
@@ -88,95 +88,56 @@ export default {
         });
       }
 
-      // POST /upload (protected, unchanged except no parsing)
-      if (request.method === "POST" && path === "/upload") {
-        const provided = request.headers.get("X-Auth-Key") || request.headers.get("x-auth-key");
-        if (!requireUploadKey(env, provided)) {
-          return errorResponse("Unauthorized", 401);
-        }
-
-        const body = await request.json().catch(() => null);
-        if (!body || !body.record) {
-          return errorResponse("Missing 'record' in body", 400);
-        }
-
-        const record = body.record;
-        if (!record.uuid) {
-          return errorResponse("Record missing uuid", 400);
-        }
-
+    if (request.method === "POST" && path === "/check-uuids") {
+        let uuids;
         try {
-          await insertRecord(env.DB, record);
-          const summary = formatShortSummary(record);
-          return jsonResponse({ ok: true, status: "inserted", summary }, 201);
+            uuids = await request.json();
+            if (!Array.isArray(uuids)) throw new Error("Payload must be an array of UUIDs");
         } catch (err) {
-          const msg = String(err?.message || err);
-          if (msg.includes("UNIQUE") || msg.includes("constraint")) {
-            const summary = formatShortSummary(record);
-            return jsonResponse({ ok: false, status: "duplicate", summary }, 409);
-          }
-          return errorResponse(`DB insert error: ${msg}`, 500);
+            console.error("Error parsing UUIDs from request:", err);
+            return errorResponse("Invalid JSON array", 400);
         }
-      }
 
-      // POST /bulk-upload → call Vercel for each UUID
-      if (request.method === "POST" && path === "/bulk-upload") {
-        let records;
+        const MAX_BATCH = 100;
+        if (uuids.length > MAX_BATCH) {
+            return errorResponse(`Too many UUIDs. Max batch size is ${MAX_BATCH}`, 413); // 413 Payload Too Large
+        }
+
+        console.log('UUIDs received for checking:', uuids);
+
+        const placeholders = uuids.map(() => "?").join(",");
+        console.log('Generated placeholders:', placeholders);
+
+        const stmt = env.DB.prepare(`SELECT uuid FROM gltp_records WHERE uuid IN (${placeholders})`);
+        let rows;
+
         try {
-          records = await request.json();
-          if (!Array.isArray(records)) throw new Error("Payload must be an array");
-        } catch {
-          return errorResponse("Invalid JSON array", 400);
+            rows = await stmt.bind(...uuids).all();
+            console.log('Database query result:', rows);
+        } catch (err) {
+            console.error('Database query error:', err);
+            return errorResponse('Database error', 500);
         }
 
-        const parsedRecords = [];
-        const results = [];
-
-        for (const r of records) {
-          const uuid = r?.uuid;
-          if (!uuid) {
-            results.push({ status: "invalid", reason: "Missing uuid" });
-            continue;
-          }
-
-          try {
-            const vercelRes = await fetch(VERCEL_PARSER_URL, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ input: uuid, origin: "bulk" }),
-            });
-            const parsed = await vercelRes.json();
-
-            if (!parsed.ok || !parsed.record) {
-              results.push({ uuid, status: "invalid", reason: "No valid cap found" });
-              continue;
-            }
-
-            const record = parsed.record;
-            record.origin = r.origin || "bulk";
-            record.timestamp_uploaded = Date.now();
-
-            parsedRecords.push(record);
-            results.push({ uuid, status: "parsed" });
-          } catch (err) {
-            results.push({ uuid, status: "error", reason: `Parse error: ${err.message}` });
-          }
+        // Ensure that rows.results is an array and each item has a uuid property
+        if (!Array.isArray(rows.results)) {
+            console.error('Unexpected database result format:', rows);
+            return errorResponse('Database returned unexpected format', 500);
         }
 
-        // Insert batch
-        if (parsedRecords.length > 0) {
-          const stmt = env.DB.prepare("INSERT OR IGNORE INTO gltp_records (uuid, payload) VALUES (?, ?)");
-          await env.DB.batch(parsedRecords.map(r => stmt.bind(r.uuid, JSON.stringify(r))));
-        }
+        const existing = new Set(rows.results.map(r => r.uuid));
+        const missing = uuids.filter(u => !existing.has(u));
 
-        return jsonResponse({
-          status: "success",
-          totalReceived: records.length,
-          parsed: parsedRecords.length,
-          details: results,
-          note: "Records parsed via Vercel; duplicates ignored via INSERT OR IGNORE",
-        });
-      }
+        // Prepare response
+        const response = {
+            totalReceived: uuids.length,
+            missingCount: missing.length,
+            missing,
+        };
+        console.log('Response data:', response);
+
+        return jsonResponse(response);
+    }
 
       return errorResponse("Not found", 404);
     } catch (err) {
