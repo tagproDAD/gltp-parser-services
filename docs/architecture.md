@@ -1,7 +1,7 @@
 # Architecture
 
 ## Overview
-This backend powers GLTP record submission, parsing, validation, and storage. It is designed for resilience, auditability, and easy handoff. Parsing is centralized to avoid Cloudflare CPU limits, and every replay UUID is tracked across completion, incomplete, no-player, and error cases.
+This backend powers GLTP record submission, parsing, validation, and storage. Parsing is centralized to vercel to avoid Cloudflare CPU limits, and every replay UUID is tracked across completion, incomplete, no-player, and error cases.
 
 ## Components
 - **Cloudflare Worker**
@@ -26,7 +26,7 @@ This backend powers GLTP record submission, parsing, validation, and storage. It
 - **Replay parser (`lib/replayParser.js`)**
   - Validates replay format and extracts:
     - Map info (`map_name`, `map_author`, `actual_map_id`).
-    - Player roster and team.
+    - Players.
     - Cap detection according to map rules (caps-to-win, red-only unless `allow_blue_caps`).
     - `record_time` (first valid cap vs. timer start), `capping_player`, `capping_player_user_id`.
     - `total_jumps` counted up to the cap timestamp.
@@ -36,7 +36,6 @@ This backend powers GLTP record submission, parsing, validation, and storage. It
 - **Spreadsheet integration (`lib/spreadsheet.js`)**
   - Loads and caches map metadata from a Google Sheets CSV export.
   - Fields include `map_id`, `equivalent_map_ids`, `caps_to_win`, `allow_blue_caps`, category/preset, and player requirements.
-  - Suggestion: move the sheet URL into an environment variable.
 
 - **Discord bot**
   - Commands:
@@ -51,8 +50,18 @@ This backend powers GLTP record submission, parsing, validation, and storage. It
   - Produce local JSON artifacts for audit (parsed results, missing UUIDs).
 
 ## Data Flow
-Discord Bot → Cloudflare Worker → Vercel Parser → TagPro → Vercel → Cloudflare Worker → D1 Database
 
+Discord Bot
+   ↓ (submit UUID)
+Cloudflare Worker (API gateway)
+   ↓ (forward to parser)
+Vercel Parser (business logic)
+   ↓ (fetch replay data)
+TagPro API (source of truth)
+   ↓ (parsed payload returned)
+Cloudflare Worker (validation + routing)
+   ↓ (insert into correct table)
+Cloudflare D1 Database
 
 - Normal path: Discord → Worker → Vercel → TagPro → Vercel → Worker → D1.
 - Worker decides destination table:
@@ -96,9 +105,10 @@ Responses are standardized with `jsonResponse`/`errorResponse`. Summaries are pr
 ## Resilience and Auditability
 - UUID uniqueness across tables prevents duplicates and simplifies reconciliation.
 - All outcomes logged:
-  - Completed, incomplete, no-player, and errors — nothing is dropped.
+  - Completed, incomplete, no-player, and errors — nothing is dropped unless cloudflare error.
 - Verification endpoints and local scripts provide end-to-end checks:
   - Presence across tables, missing lists, and deep comparisons with legacy JSON.
+  - Client (discord/website/other) needs to do final verification
 
 ## Deployment and Local Testing Notes
 - **Cloudflare Worker (Wrangler)**
@@ -114,4 +124,5 @@ Responses are standardized with `jsonResponse`/`errorResponse`. Summaries are pr
   - Logging on free tiers is limited; use local dev servers for debugging.
 
 ## Related Repositories
-- GLTP Website (maps, leaderboards, profiles, league): link to the separate frontend repo for consumption details and UI.
+- GLTP Website (maps, leaderboards, profiles, league): https://github.com/BambiTP/GLTP
+

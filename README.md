@@ -13,32 +13,48 @@ The system consists of several components working together:
 - **Cloudflare D1 Database** → Stores all records, incomplete runs, no-player runs, and error logs.
 - **Vercel Parser Service** → Single source of truth for replay parsing (avoids Cloudflare CPU limits).
 - **Replay Parser** → Extracts structured data from TagPro replays (caps, jumps, players, etc.).
-- **Spreadsheet Integration** → Loads map metadata (caps-to-win, categories, presets).
+- **Spreadsheet Integration** → Loads map metadata (caps-to-win, categories, etc).
 - **Discord Bot** → Allows players to submit and check records directly in Discord.
 - **Local Scripts** → Developer utilities for migration, verification, and testing.
 
 **Workflow:**
 
-Discord Bot → Cloudflare Worker → Vercel Parser → TagPro → Vercel → Cloudflare Worker → D1 Database
+Discord Bot
+   ↓ (submit UUID)
+Cloudflare Worker (API gateway)
+   ↓ (forward to parser)
+Vercel Parser (business logic)
+   ↓ (fetch replay data)
+TagPro API (source of truth)
+   ↓ (parsed payload returned)
+Cloudflare Worker (validation + routing)
+   ↓ (insert into correct table)
+Cloudflare D1 Database
+
 
 ---
 
 ## 📂 Repository Structure
 
-workers/worker.js # Cloudflare Worker entrypoint 
-workers/db/ # DB insert helpers 
-workers/utils/ # Response + formatting utilities 
-api/parse.js # Vercel API handler 
-lib/replayParser.js # Core replay parsing logic for vercel 
-lib/spreadsheet.js # Map metadata loader for vercel
-lib/validation.js # Input validation helpers for vercel 
-discordScripts # Discord bot + sanitization 
-localsrc/upload.js # Local migration + testing 
-docs/architecture.md # System components + data flow 
-docs/workflows.md # Record lifecycle + error handling 
-docs/schema.md # Database schema + payload format 
-docs/dev-setup.md # Local development + testing 
-docs/migration.md # JSON → D1 migration notes
+├── workers/
+│   ├── worker.js          # Cloudflare Worker entrypoint
+│   ├── db/                # DB insert helpers
+│   └── utils/             # Response + formatting utilities
+├── api/
+│   └── parse.js           # Vercel API handler
+├── lib/
+│   ├── replayParser.js    # Core replay parsing logic for Vercel
+│   ├── spreadsheet.js     # Map metadata loader for Vercel
+│   └── validation.js      # Input validation helpers for Vercel
+├── discordScripts/        # Discord bot + sanitization
+├── localsrc/
+│   └── upload.js          # Local migration + testing
+├── docs/
+│   ├── architecture.md    # System components + data flow
+│   ├── workflows.md       # Record lifecycle + error handling
+│   ├── schema.md          # Database schema + payload format
+│   ├── dev-setup.md       # Local development + testing
+│   └── migration.md       # JSON → D1 migration notes
 
 
 ---
@@ -138,7 +154,7 @@ Dev Setup → Local development + testing
 Migration → JSON → D1 migration notes
 
 ### 🌐 Related Repositories
-GLTP Website → Frontend for maps, leaderboards, profiles, and league play. (link to website repo here)
+GLTP Website → Frontend for maps, leaderboards, profiles, and league play. https://github.com/BambiTP/GLTP
 
 ### Status
 - JSON → D1 migration complete (~7,100 records + ~40,000 UUIDs processed).

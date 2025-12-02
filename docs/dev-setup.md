@@ -67,6 +67,7 @@ Rate limits:
 - Sleep ~3s between parse requests.
 - Sleep ~1s between check requests.
 - Prevents hitting TagPro or Cloudflare API limits.
+- Was not tested heavily because I got bored of getting blocked
 
 Logging:
 - Free tiers (Cloudflare + Vercel) have limited logging.

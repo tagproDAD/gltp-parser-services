@@ -3,7 +3,7 @@
 ## Record Lifecycle
 
 1. **Submission**
-   - Player submits a replay UUID or link via the Discord bot (`!upload`).
+   - Player submits a replay UUID or link via the Discord bot, website, grav bot, or other client.
    - Bot sends the UUID to the Cloudflare Worker `/parse` endpoint.
 
 2. **Parsing**
