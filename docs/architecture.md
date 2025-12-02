@@ -56,12 +56,9 @@ Discord Bot
 Cloudflare Worker (API gateway)
    ↓ (forward to parser)
 Vercel Parser (business logic)
-   ↓ (fetch replay data)
-TagPro API (source of truth)
-   ↓ (parsed payload returned)
+   ↓ (fetch replay data from tagpro and parse)
 Cloudflare Worker (validation + routing)
    ↓ (insert into correct table)
-Cloudflare D1 Database
 ```
 
 - Normal path: Discord → Worker → Vercel → TagPro → Vercel → Worker → D1.
