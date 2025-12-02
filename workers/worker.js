@@ -1,5 +1,6 @@
 import { jsonResponse, errorResponse } from "./utils/responses.js";
-import { requireUploadKey } from "./utils/auth.js";
+import { insertIncompleteRecord } from "./db/insertIncompleteRecord.js";
+import { insertNoPlayerRecord } from "./db/insertNoPlayerRecord.js";
 import { insertRecord } from "./db/insertRecord.js";
 import { formatShortSummary } from "./utils/format.js";
 
@@ -23,9 +24,27 @@ export default {
         });
       }
 
-      // GET /records (unchanged)
+      // GET /records
       if (request.method === "GET" && path === "/records") {
         const rows = await env.DB.prepare("SELECT payload FROM gltp_records").all();
+        const arr = (rows.results || []).map(r => {
+          try { return JSON.parse(r.payload); } catch { return r.payload; }
+        });
+        return jsonResponse(arr);
+      }
+
+      // GET /incomplete-records
+      if (request.method === "GET" && path === "/incomplete-records") {
+        const rows = await env.DB.prepare("SELECT payload FROM gltp_incomplete_records").all();
+        const arr = (rows.results || []).map(r => {
+          try { return JSON.parse(r.payload); } catch { return r.payload; }
+        });
+        return jsonResponse(arr);
+      }
+
+      // GET /noplayers
+      if (request.method === "GET" && path === "/noplayers") {
+        const rows = await env.DB.prepare("SELECT payload FROM gltp_no_player_records").all();
         const arr = (rows.results || []).map(r => {
           try { return JSON.parse(r.payload); } catch { return r.payload; }
         });
@@ -61,7 +80,7 @@ export default {
         }
 
         const record = parsed.record;
-        record.origin = body.origin || "cloudflare";
+        record.origin = "data migration";
         record.timestamp_uploaded = Date.now();
 
         const summary = formatShortSummary(record);
@@ -69,8 +88,22 @@ export default {
         // Insert into D1
         let uploadResult;
         try {
-          await insertRecord(env.DB, record);
-          uploadResult = { status: 201, body: { ok: true, status: "inserted", summary } };
+          if (record.record_time && record.capping_player) {
+            // Successful completion
+            console.log('Inserting Completion Record', record);
+            await insertRecord(env.DB, record);
+            uploadResult = { status: 201, body: { ok: true, status: "inserted", summary } };
+          } else if (Array.isArray(record.players) && record.players.length > 0) {
+            // Incomplete run, but with players → log it
+            console.log('Inserting Non Complete Record', record);
+            await insertIncompleteRecord(env.DB, record);
+            uploadResult = { status: 201, body: { ok: true, status: "logged_incomplete", summary } };
+          } else {
+            // No players → skip logging entirely
+            console.log('No players found', record);
+            await insertNoPlayerRecord(env.DB, record);
+            uploadResult = { status: 201, body: { ok: true, status: "logged_no_players", summary } };
+          }
         } catch (err) {
           const msg = String(err?.message || err);
           if (msg.includes("UNIQUE") || msg.includes("constraint")) {
@@ -88,6 +121,59 @@ export default {
         });
       }
 
+    if (request.method === "POST" && path === "/check-errors") {
+        let uuids;
+        try {
+            uuids = await request.json();
+            if (!Array.isArray(uuids)) throw new Error("Payload must be an array of UUIDs");
+        } catch {
+            return errorResponse("Invalid JSON array", 400);
+        }
+
+        const MAX_BATCH = 100;
+        if (uuids.length > MAX_BATCH) {
+            return errorResponse(`Too many UUIDs. Max batch size is ${MAX_BATCH}`, 413);
+        }
+
+        // Validate UUIDs before querying
+        const regex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+        const safeUuids = uuids.filter(u => typeof u === "string" && regex.test(u));
+
+        if (safeUuids.length === 0) {
+            return jsonResponse({
+            totalReceived: uuids.length,
+            foundCount: 0,
+            missingCount: uuids.length,
+            existing: [],
+            missing: uuids
+            });
+        }
+
+        const placeholders = safeUuids.map(() => "?").join(",");
+        const stmt = env.DB.prepare(`SELECT uuid FROM gltp_errors WHERE uuid IN (${placeholders})`);
+
+        let rows;
+        try {
+            rows = await stmt.bind(...safeUuids).all();
+        } catch (err) {
+            console.error("Database query error:", err);
+            return errorResponse("Database error", 500);
+        }
+
+        const existing = rows.results.map(r => r.uuid);
+        const existingSet = new Set(existing);
+        const missing = uuids.filter(u => !existingSet.has(u));
+
+        return jsonResponse({
+            totalReceived: uuids.length,
+            foundCount: existing.length,
+            missingCount: missing.length,
+            existing,
+            missing
+        });
+    }
+
+
     if (request.method === "POST" && path === "/check-uuids") {
         let uuids;
         try {
@@ -100,44 +186,62 @@ export default {
 
         const MAX_BATCH = 100;
         if (uuids.length > MAX_BATCH) {
-            return errorResponse(`Too many UUIDs. Max batch size is ${MAX_BATCH}`, 413); // 413 Payload Too Large
+            return errorResponse(`Too many UUIDs. Max batch size is ${MAX_BATCH}`, 413);
         }
 
-        console.log('UUIDs received for checking:', uuids);
+        console.log("UUIDs received for checking:", uuids);
 
         const placeholders = uuids.map(() => "?").join(",");
-        console.log('Generated placeholders:', placeholders);
 
-        const stmt = env.DB.prepare(`SELECT uuid FROM gltp_records WHERE uuid IN (${placeholders})`);
+        // Efficient single query across all three tables
+        const stmt = env.DB.prepare(`
+            SELECT uuid, 'records' AS source FROM gltp_records WHERE uuid IN (${placeholders})
+            UNION
+            SELECT uuid, 'incomplete' AS source FROM gltp_incomplete_records WHERE uuid IN (${placeholders})
+            UNION
+            SELECT uuid, 'noplayers' AS source FROM gltp_no_player_records WHERE uuid IN (${placeholders})
+        `);
+
         let rows;
-
         try {
-            rows = await stmt.bind(...uuids).all();
-            console.log('Database query result:', rows);
+            // Bind UUIDs three times (once per IN clause)
+            rows = await stmt.bind(...uuids, ...uuids, ...uuids).all();
+            console.log("Database query result:", rows);
         } catch (err) {
-            console.error('Database query error:', err);
-            return errorResponse('Database error', 500);
+            console.error("Database query error:", err);
+            return errorResponse("Database error", 500);
         }
 
-        // Ensure that rows.results is an array and each item has a uuid property
         if (!Array.isArray(rows.results)) {
-            console.error('Unexpected database result format:', rows);
-            return errorResponse('Database returned unexpected format', 500);
+            console.error("Unexpected database result format:", rows);
+            return errorResponse("Database returned unexpected format", 500);
         }
 
-        const existing = new Set(rows.results.map(r => r.uuid));
-        const missing = uuids.filter(u => !existing.has(u));
+        // Build existing list with source info
+        const existing = rows.results.map(r => ({ uuid: r.uuid, source: r.source }));
+        const existingSet = new Set(existing.map(r => r.uuid));
+        const missing = uuids.filter(u => !existingSet.has(u));
+
+        // Count by source
+        const countsBySource = existing.reduce((acc, r) => {
+            acc[r.source] = (acc[r.source] || 0) + 1;
+            return acc;
+        }, {});
 
         // Prepare response
         const response = {
             totalReceived: uuids.length,
+            foundCount: existing.length,
             missingCount: missing.length,
-            missing,
+            countsBySource,   // e.g. { records: 12, incomplete: 5, noplayers: 3 }
+            existing,         // detailed list of found UUIDs with source
+            missing           // list of UUIDs not found in any table
         };
-        console.log('Response data:', response);
 
+        console.log("Response data:", response);
         return jsonResponse(response);
     }
+
 
       return errorResponse("Not found", 404);
     } catch (err) {
