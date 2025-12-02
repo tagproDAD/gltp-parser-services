@@ -2,6 +2,7 @@ import { jsonResponse, errorResponse } from "./utils/responses.js";
 import { insertIncompleteRecord } from "./db/insertIncompleteRecord.js";
 import { insertNoPlayerRecord } from "./db/insertNoPlayerRecord.js";
 import { insertRecord } from "./db/insertRecord.js";
+import { insertError } from "./db/insertError.js";
 import { formatShortSummary } from "./utils/format.js";
 
 const VERCEL_PARSER_URL = "https://gltp-parser-services.vercel.app/api/parse";
@@ -55,69 +56,79 @@ export default {
       if (request.method === "POST" && path === "/parse") {
         const body = await request.json().catch(() => null);
         if (!body || !body.input) {
-          return errorResponse("Missing 'input' in request body", 400);
+            return errorResponse("Missing 'input' in request body", 400);
         }
 
         // Call Vercel parser
         let parsed;
         try {
-          const vercelRes = await fetch(VERCEL_PARSER_URL, {
+            const vercelRes = await fetch(VERCEL_PARSER_URL, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(body),
-          });
-          parsed = await vercelRes.json();
+            });
+            parsed = await vercelRes.json();
         } catch (err) {
-          return errorResponse(`Failed to reach parser: ${err.message}`, 500);
+            await insertError(env.DB, body.input, `Parser unreachable: ${err.message}`);
+            return errorResponse(`Failed to reach parser: ${err.message}`, 500);
         }
 
+        // Parser failed or returned no record
         if (!parsed.ok || !parsed.record) {
-          return jsonResponse({
+            await insertError(env.DB, body.input, parsed.error || "Parse failed");
+            return jsonResponse({
             ok: false,
             summary: parsed.summary || "Parse failed",
             error: parsed.error || "No record returned",
-          }, 400);
+            }, 400);
         }
 
+        // Parser succeeded
         const record = parsed.record;
         record.origin = "data migration";
         record.timestamp_uploaded = Date.now();
 
         const summary = formatShortSummary(record);
 
-        // Insert into D1
         let uploadResult;
         try {
-          if (record.record_time && record.capping_player) {
-            // Successful completion
-            console.log('Inserting Completion Record', record);
-            await insertRecord(env.DB, record);
-            uploadResult = { status: 201, body: { ok: true, status: "inserted", summary } };
-          } else if (Array.isArray(record.players) && record.players.length > 0) {
-            // Incomplete run, but with players → log it
-            console.log('Inserting Non Complete Record', record);
-            await insertIncompleteRecord(env.DB, record);
-            uploadResult = { status: 201, body: { ok: true, status: "logged_incomplete", summary } };
-          } else {
-            // No players → skip logging entirely
-            console.log('No players found', record);
-            await insertNoPlayerRecord(env.DB, record);
-            uploadResult = { status: 201, body: { ok: true, status: "logged_no_players", summary } };
-          }
+            if (record.record_time && record.capping_player) {
+                // Successful completion
+                console.log('Inserting Completion Record', record);
+                await insertRecord(env.DB, record);
+                uploadResult = { status: 201, body: { ok: true, status: "inserted", summary } };
+            } else if (Array.isArray(record.players) && record.players.length > 0) {
+                // Incomplete run with players
+                console.log('Inserting Non Complete Record', record);
+                await insertIncompleteRecord(env.DB, record);
+                uploadResult = { status: 201, body: { ok: true, status: "logged_incomplete", summary } };
+            } else {
+                // No players
+                console.log('No players found', record);
+                await insertNoPlayerRecord(env.DB, record);
+                uploadResult = { status: 201, body: { ok: true, status: "logged_no_players", summary } };
+            }
         } catch (err) {
-          const msg = String(err?.message || err);
-          if (msg.includes("UNIQUE") || msg.includes("constraint")) {
-            uploadResult = { status: 409, body: { ok: false, status: "duplicate", summary } };
-          } else {
-            uploadResult = { status: 500, body: { error: `DB insert error: ${msg}` } };
-          }
+            // Use record.uuid if available, otherwise fall back to body.input
+            const msg = String(err?.message || err);
+            if (msg.includes("UNIQUE") || msg.includes("constraint")) {
+                uploadResult = { status: 409, body: { ok: false, status: "duplicate", summary } };
+            } else {
+                const uuidToLog = record?.uuid || body.input;
+                try {
+                    await insertError(env.DB, uuidToLog, `DB insert error: ${msg}`);
+                } catch (logErr) {
+                    console.error("Failed to log error:", logErr);
+                }
+                uploadResult = { status: 500, body: { error: `DB insert error: ${msg}` } };
+            }
         }
 
         return jsonResponse({
-          ok: true,
-          summary,
-          record,
-          upload: uploadResult,
+            ok: true,
+            summary,
+            record,
+            upload: uploadResult,
         });
       }
 
