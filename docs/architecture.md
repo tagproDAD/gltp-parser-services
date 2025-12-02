@@ -50,7 +50,7 @@ This backend powers GLTP record submission, parsing, validation, and storage. Pa
   - Produce local JSON artifacts for audit (parsed results, missing UUIDs).
 
 ## Data Flow
-
+```
 Discord Bot
    ↓ (submit UUID)
 Cloudflare Worker (API gateway)
@@ -62,6 +62,7 @@ TagPro API (source of truth)
 Cloudflare Worker (validation + routing)
    ↓ (insert into correct table)
 Cloudflare D1 Database
+```
 
 - Normal path: Discord → Worker → Vercel → TagPro → Vercel → Worker → D1.
 - Worker decides destination table:

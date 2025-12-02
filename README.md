@@ -18,7 +18,7 @@ The system consists of several components working together:
 - **Local Scripts** → Developer utilities for migration, verification, and testing.
 
 **Workflow:**
-
+```
 Discord Bot
    ↓ (submit UUID)
 Cloudflare Worker (API gateway)
@@ -30,12 +30,14 @@ TagPro API (source of truth)
 Cloudflare Worker (validation + routing)
    ↓ (insert into correct table)
 Cloudflare D1 Database
-
+```
 
 ---
 
 ## 📂 Repository Structure
 
+📂 Repository Structure
+```
 ├── workers/
 │   ├── worker.js          # Cloudflare Worker entrypoint
 │   ├── db/                # DB insert helpers
@@ -55,6 +57,7 @@ Cloudflare D1 Database
 │   ├── schema.md          # Database schema + payload format
 │   ├── dev-setup.md       # Local development + testing
 │   └── migration.md       # JSON → D1 migration notes
+```
 
 
 ---
