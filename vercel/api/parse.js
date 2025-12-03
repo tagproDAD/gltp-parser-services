@@ -17,6 +17,7 @@ export default async function handler(req, res) {
     }
 
     if (!record) {
+      console.log("no cap found");
       return res.status(400).json({ error: "No valid cap found" });
     }
 
