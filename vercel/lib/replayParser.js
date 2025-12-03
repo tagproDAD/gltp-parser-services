@@ -100,7 +100,7 @@ function getDetails(replay, maps) {
 
   if (matchedMap) {
     if (matchedMap.caps_to_win === "pups") {
-      capsToWin = null; // FIXED — Infinity cannot be matched
+      capsToWin = "-1"; // FIXED — Infinity cannot be matched
     } else {
       capsToWin = parseInt(matchedMap.caps_to_win || "1", 10);
     }
