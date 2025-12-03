@@ -85,7 +85,7 @@ export default {
 
         // Parser succeeded
         const record = parsed.record;
-        record.origin = "data migration";
+        record.origin = body.origin || "cloudflare";
         record.timestamp_uploaded = Date.now();
 
         const summary = formatShortSummary(record);
@@ -204,19 +204,22 @@ export default {
 
         const placeholders = uuids.map(() => "?").join(",");
 
-        // Efficient single query across all three tables
+        // Union tables first, then filter once
         const stmt = env.DB.prepare(`
-            SELECT uuid, 'records' AS source FROM gltp_records WHERE uuid IN (${placeholders})
-            UNION
-            SELECT uuid, 'incomplete' AS source FROM gltp_incomplete_records WHERE uuid IN (${placeholders})
-            UNION
-            SELECT uuid, 'noplayers' AS source FROM gltp_no_player_records WHERE uuid IN (${placeholders})
+            SELECT uuid, source
+            FROM (
+            SELECT uuid, 'records' AS source FROM gltp_records
+            UNION ALL
+            SELECT uuid, 'incomplete' AS source FROM gltp_incomplete_records
+            UNION ALL
+            SELECT uuid, 'noplayers' AS source FROM gltp_no_player_records
+            ) AS combined
+            WHERE uuid IN (${placeholders})
         `);
 
         let rows;
         try {
-            // Bind UUIDs three times (once per IN clause)
-            rows = await stmt.bind(...uuids, ...uuids, ...uuids).all();
+            rows = await stmt.bind(...uuids).all();
             console.log("Database query result:", rows);
         } catch (err) {
             console.error("Database query error:", err);
@@ -251,7 +254,8 @@ export default {
 
         console.log("Response data:", response);
         return jsonResponse(response);
-    }
+        }
+
 
 
       return errorResponse("Not found", 404);
