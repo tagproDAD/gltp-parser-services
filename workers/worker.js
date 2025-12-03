@@ -44,6 +44,41 @@ export default {
         return jsonResponse(arr);
       }
 
+      // DELETE /delete-record
+        if (request.method === "DELETE" && path === "/delete-record") {
+            let body;
+            try {
+                body = await request.json();
+            } catch {
+                return errorResponse("Invalid JSON body", 400);
+            }
+
+            const { uuid, password } = body || {};
+            console.log("deleting UUID:");
+            console.log(uuid);
+            if (!uuid || typeof uuid !== "string") {
+                return errorResponse("Invalid UUID", 400);
+            }
+            if (password !== env.ADMIN_PASSWORD) {
+                return errorResponse("Unauthorized", 401);
+            }
+
+            try {
+                const stmt = env.DB.prepare("DELETE FROM gltp_records WHERE uuid = ? LIMIT 1");
+                const result = await stmt.bind(uuid).run();
+
+                if (result.success) {
+                return jsonResponse({ ok: true, deleted: uuid });
+                } else {
+                return errorResponse("Record not found or delete failed", 404);
+                }
+            } catch (err) {
+                console.error("Delete error:", err);
+                return errorResponse("Database error", 500);
+            }
+        }
+
+
       // GET /noplayers
       if (request.method === "GET" && path === "/noplayers") {
         const rows = await env.DB.prepare("SELECT payload FROM gltp_no_player_records").all();
