@@ -6,6 +6,7 @@ import { insertError } from "./db/insertError.js";
 import { formatShortSummary } from "./utils/format.js";
 
 const VERCEL_PARSER_URL = "https://gltp-parser-services.vercel.app/api/parse";
+//const VERCEL_PARSER_URL = "http://localhost:3000/api/parse";
 
 export default {
   async fetch(request, env) {
@@ -85,7 +86,7 @@ export default {
 
         // Parser succeeded
         const record = parsed.record;
-        record.origin = body.origin || "cloudflare";
+        record.origin = body.origin || "Unknown cloudflare";
         record.timestamp_uploaded = Date.now();
 
         const summary = formatShortSummary(record);
