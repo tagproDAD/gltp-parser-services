@@ -30,6 +30,7 @@ export async function fetchMaps() {
       map_id: get(row, "Map ID"),
       equivalent_map_ids: get(row, "Pseudo \nMap ID").split(",").map(id => id.trim()).filter(Boolean),
       caps_to_win: get(row, "Num\nof caps"),
+      team_caps: get(row, "Team\nCaps"),
       allow_blue_caps: get(row, "Allow Blue Caps").toUpperCase() === "TRUE",
       balls_req: get(row, "Min\nBalls \nRec"),
       max_balls_rec: get(row, "Max\nBalls\nRec"),

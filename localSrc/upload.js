@@ -2,12 +2,11 @@ import fs from "fs";
 
 // Worker endpoints
 const WORKER_PARSE_URL = `https://gltp.fwotagprodad.workers.dev/parse`;
-//const VERCEL_PARSE_URL = ''
+const VERCEL_PARSE_URL = 'http://localhost:3000/api/parse'
 //const WORKER_PARSE_URL = 'http://127.0.0.1:8787/parse';
 const WORKER_CHECK_URL = `https://gltp.fwotagprodad.workers.dev/check-uuids`;
 const WORKER_CHECK_ERRORS_URL = `https://gltp.fwotagprodad.workers.dev/check-errors`;
 const WORKER_DELETE_URL = "https://gltp.fwotagprodad.workers.dev/delete-record";
-const WORKER_PASSWORD = ""
 
 // Helper: sleep for ms milliseconds
 function sleep(ms) {
@@ -74,7 +73,7 @@ async function parseRecord(uuid) {
     const res = await fetch(WORKER_PARSE_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ input: uuid }), // /parse expects { input }
+      body: JSON.stringify({ input: uuid, origin: "local bot" }), // /parse expects { input }
     });
     const parsed = await res.json();
     if (!parsed.ok) {
@@ -152,6 +151,24 @@ async function runParse() {
   console.log("🎉 All parsing complete. Results saved to parsed-results.json");
 }
 
+// Mode: parse all records
+async function runParseVercel() {
+  // Load records.json (array of objects with at least a uuid field)
+  const records = JSON.parse(fs.readFileSync("uuidsSanitized.json", "utf8"));
+  const results = [];
+  for (let i = 0; i < records.length; i++) {
+    const uuid = records[i].uuid;
+    console.log(`Parsing record ${i + 1}/${records.length}: ${uuid}`);
+    const parsed = await parseWithVercel(uuid);
+    if (parsed) results.push(parsed);
+
+    await sleep(2000);
+  }
+
+  fs.writeFileSync("parsed-results.json", JSON.stringify(results, null, 2));
+  console.log("🎉 All parsing complete. Results saved to parsed-results.json");
+}
+
 // Mode: delete all records from uuids.json
 async function runDelete() {
   // Load uuids.json (array of UUID strings)
@@ -208,7 +225,7 @@ async function runErrorCheck() {
     await sleep(1000); // small pause between batches
   }
 
-  fs.writeFileSync("missing-records-errors.json", JSON.stringify(missing, null, 2));
+  fs.writeFileSync("missing-records.json", JSON.stringify(missing, null, 2));
   console.log(`🎉 Check complete. ${missing.length} missing UUIDs saved to missing-records-errors.json`);
 }
 
@@ -222,7 +239,7 @@ function extractUuids() {
 
 //fixes format of dump of text uuids into json uuid: value
 function sanitizeTextUuids() {
-  const inputFile = "sbarmyUUIDDump.txt";
+  const inputFile = "botuuids.txt";
   const outputFile = "uuidsSanitized.json";
   const rawData = fs.readFileSync(inputFile, "utf8");
   
@@ -349,10 +366,54 @@ if (mismatched.length === 0) {
 
 }
 
+// New pipeline mode
+async function runPipeline() {
+  console.log("🚀 Starting pipeline...");
+
+  // Step 1: sanitize text
+  sanitizeTextUuids();
+
+  // Step 2: check duplicates (adds them to missing-records)
+  await runCheck();
+
+  // Step 3: sanitize again
+  sanitizeUuids();
+
+  // Step 4: check duplicate errors
+  await runErrorCheck();
+
+  // Step 5 sanitize
+  sanitizeUuids();
+
+  // Step 4: pause for inspection
+  console.log("⏸️ Pausing before parse...");
+  console.log("👉 Review missing-records.json and missing-records-errors.json to see UUIDs not uploaded.");
+  process.stdout.write("Press Enter to continue, or type 'q' to quit: ");
+
+  await new Promise(resolve => {
+    process.stdin.once("data", (data) => {
+      const input = data.toString().trim().toLowerCase();
+      if (input === "q" || input === "quit") {
+        console.log("🛑 Pipeline stopped by user.");
+        process.exit(0); // terminate the script immediately
+      }
+      resolve();
+    });
+  });
+
+  // Step 5: parse
+  await runParse();
+
+  console.log("🎉 Pipeline complete!");
+}
+
+
 // Entry point: choose mode based on CLI parameter
 const mode = process.argv[2];
 if (mode === "parse") {
   runParse();
+} else if (mode === "parseVercel") {
+    runParseVercel();
 } else if (mode === "check") {
     runCheck();
 } else if (mode === "checkErrors") {
@@ -367,6 +428,8 @@ if (mode === "parse") {
     compareData();
 } else if (mode === "delete") {
     runDelete();
+} else if (mode === "pipeline") {
+  runPipeline();
 } else {
   console.log("Usage: node script.js [parse|check|checkErrors|extract|sanitize|compare]");
 } 

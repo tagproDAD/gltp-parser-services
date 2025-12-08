@@ -2,11 +2,11 @@ import { parseReplayFromUUID, parseReplayFromReplayLink } from "../lib/replayPar
 
 export default async function handler(req, res) {
   try {
+    console.log("starting");
     const { input, origin } = req.body || {};
     if (!input) {
       return res.status(400).json({ error: "Missing 'input' in request body" });
     }
-    console.log("starting");
     let record;
     if (input.startsWith("http")) {
       console.log("linked");

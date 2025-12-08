@@ -97,6 +97,7 @@ function getDetails(replay, maps) {
   let capsToWin = 1;
   let effectiveMapId = actualMapId;
   let allowBlueCaps = false;
+  let teamCapsMode = false;
 
   if (matchedMap) {
     if (matchedMap.caps_to_win === "pups") {
@@ -106,36 +107,49 @@ function getDetails(replay, maps) {
     }
     effectiveMapId = matchedMap.map_id;
     allowBlueCaps = Boolean(matchedMap.allow_blue_caps);
+    teamCapsMode = Boolean(matchedMap.team_caps);
   }
 
   // ---------------------------
-  // CAPTURE DETECTION FIX
+  // CAPTURE DETECTION
   // ---------------------------
-  for (const [ts, type, data] of replay) {
-    if (type !== "p") continue;
+  if (teamCapsMode) {
+    let redCaps = 0;
+    let blueCaps = 0;
+    let capTimestamp = null;
+    let lastCapPlayer = null;
 
-    for (const playerData of data) {
-      const captures = playerData["s-captures"];
-      const cappingPlayer = players[playerData.id];
-      if (!cappingPlayer) continue;
+    for (const [ts, type, data] of replay) {
+      if (type !== "p") continue;
+      for (const playerData of data) {
+        const cappingPlayer = players[playerData.id];
+        if (!cappingPlayer) continue;
 
-      // Check team rules (FIXED)
-      if (!cappingPlayer.is_red && !allowBlueCaps) {
-        continue;
+        const captures = playerData["s-captures"] || 0;
+
+        if (cappingPlayer.is_red) {
+          redCaps += captures;
+          if (redCaps >= capsToWin && capTimestamp === null) {
+            capTimestamp = ts;
+            lastCapPlayer = cappingPlayer; // record who sealed the win
+          }
+        } else if (allowBlueCaps) {
+          blueCaps += captures;
+          if (blueCaps >= capsToWin && capTimestamp === null) {
+            capTimestamp = ts;
+            lastCapPlayer = cappingPlayer; // record who sealed the win
+          }
+        }
       }
+      if (capTimestamp !== null) break;
+    }
 
-      // Check capture count (FIXED pup logic)
-      if (capsToWin !== null && captures !== capsToWin) {
-        continue;
-      }
+    if (capTimestamp !== null && lastCapPlayer) {
+      recordTime = capTimestamp - firstTimerTs;
+      cappingUserName = lastCapPlayer.name;
+      cappingUserId = lastCapPlayer.user_id;
 
-      // CAP CONFIRMED
-      recordTime = ts - firstTimerTs;
-      cappingUserName = cappingPlayer.name;
-      cappingUserId = cappingPlayer.user_id;
-
-      // Count jumps until this timestamp
-      const capTimestamp = ts;
+      // Jumps: optional per-team separation
       total_jumps = replay.reduce((count, r) => {
         const [ts2, type2, data2] = r;
         if (
@@ -144,22 +158,74 @@ function getDetails(replay, maps) {
           data2?.type === "sound" &&
           data2?.data?.s === "jump"
         ) {
-          return count + 1;
+          const player = players[data2.id];
+          if (player && player.is_red === lastCapPlayer.is_red) {
+            return count + 1;
+          }
         }
         return count;
       }, 0);
 
-      // Get most recent chat
+      // Get most recent chat from the capping player
       const playerChats = replay.filter(
-        r => r[1] === "chat" && r[2].from === playerData.id
+        r => r[1] === "chat" && r[2].from === lastCapPlayer.id
       );
       cappingPlayerQuote = playerChats.length
         ? playerChats[playerChats.length - 1][2].message
         : null;
-
-      break;
     }
-    if (recordTime !== null) break;
+  } else {
+    for (const [ts, type, data] of replay) {
+      if (type !== "p") continue;
+
+      for (const playerData of data) {
+        console.log(playerData);
+        const captures = playerData["s-captures"];
+        const cappingPlayer = players[playerData.id];
+        if (!cappingPlayer) continue;
+
+        // Check team rules (FIXED)
+        if (!cappingPlayer.is_red && !allowBlueCaps) {
+          continue;
+        }
+
+        // Check capture count (FIXED pup logic)
+        if (capsToWin !== null && captures !== capsToWin) {
+          continue;
+        }
+
+        // CAP CONFIRMED
+        recordTime = ts - firstTimerTs;
+        cappingUserName = cappingPlayer.name;
+        cappingUserId = cappingPlayer.user_id;
+
+        // Count jumps until this timestamp
+        const capTimestamp = ts;
+        total_jumps = replay.reduce((count, r) => {
+          const [ts2, type2, data2] = r;
+          if (
+            ts2 <= capTimestamp &&
+            type2 === "replayPlayerMessage" &&
+            data2?.type === "sound" &&
+            data2?.data?.s === "jump"
+          ) {
+            return count + 1;
+          }
+          return count;
+        }, 0);
+
+        // Get most recent chat
+        const playerChats = replay.filter(
+          r => r[1] === "chat" && r[2].from === playerData.id
+        );
+        cappingPlayerQuote = playerChats.length
+          ? playerChats[playerChats.length - 1][2].message
+          : null;
+
+        break;
+      }
+      if (recordTime !== null) break;
+    }
   }
 
   return {
