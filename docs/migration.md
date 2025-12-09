@@ -43,6 +43,14 @@
 - **sanitizeText** → Convert raw text dump into JSON.
 - **sanitize** → Convert `missing-records.json` into JSON.
 - **compare** → Deep compare old vs. new records.
+- **check / checkErrors** → Verify UUIDs across record and error tables.
+- **delete** → Remove records by UUID or map_id.
+- **pipeline** → Full cleanup workflow:
+  1. Sanitize UUIDs
+  2. Check duplicates
+  3. Check errors
+  4. Pause for inspection
+  5. Parse and insert
 
 ---
 
@@ -66,3 +74,23 @@
 
 - **Transparency**  
   Summaries provide quick feedback for Discord bot and migration logs.
+
+
+## Map Fix Script
+
+A new local script `mapFix.js` re‑parses affected UUIDs with corrected capsToWin logic.  
+Usage:
+- Identify UUIDs impacted by changes to the parsing logic.
+- Run `mapFix.js` to re‑parse and update rows in `gltp_records`.
+- Ensures consistency for maps with `caps_to_win > 1`.
+
+The `mapFix.js` script supports two modes:
+
+- **delete** → Fetches all records for a target `map_id` and generates a SQL DELETE statement.  
+  Useful for removing mis‑parsed maps before re‑upload.
+
+- **compare** → Iterates through all records, re‑parses each UUID via the Vercel parser, and compares key fields (`map_name`, `map_id`, `players`, `caps_to_win`, etc.).  
+  Differences are logged in batches of 100 and summarized at the end.
+
+This tool is used during cleanup of legacy records affected by capsToWin attribution bugs.
+

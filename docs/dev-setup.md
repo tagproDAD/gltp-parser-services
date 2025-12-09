@@ -77,13 +77,16 @@ Logging:
 
 ## Local Scripts
 
-scripts/upload.js provides developer utilities for migration and testing:
-- parse → Upload UUIDs to Worker /parse
-- check → Verify UUIDs across record tables
-- checkErrors → Verify UUIDs against error table
-- extract → Extract UUIDs from old JSON records
-- sanitizeText → Convert raw text dump into JSON
-- sanitize → Convert missing-records.json into JSON
-- compare → Deep compare old vs. new records
+- `parse` → Upload UUIDs to Worker /parse
+- `parseVercel` → Upload UUIDs directly to Vercel parser
+- `check` → Verify UUIDs across record tables
+- `checkErrors` → Verify UUIDs against error table
+- `extract` → Extract UUIDs from old JSON
+- `sanitizeText` → Convert raw text dump into JSON
+- `sanitize` → Convert missing-records.json into JSON
+- `compare` → Deep compare old vs. new records
+- `delete` → Remove records by UUID or map_id
+- `mapFix` → Re‑parse and fix records with capsToWin edge cases
+- `pipeline` → End‑to‑end workflow: sanitize → check → error check → parse
 
 Scripts produce local JSON artifacts for auditability (parsed results, missing UUIDs).

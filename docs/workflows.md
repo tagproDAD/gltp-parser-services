@@ -38,6 +38,12 @@
 - **Duplicate UUIDs**  
   Worker returns `409 Conflict` and does not insert.
 
+### Special Handling: capsToWin > 1
+
+- Team modes now accumulate caps per side.
+- Non‑team modes require a single player to reach `caps_to_win`.
+- Older records parsed incorrectly may need cleanup via `mapFix.js`.
+
 ## Verification Workflows
 
 - **Check UUIDs**
@@ -55,6 +61,12 @@
     - `existing` → UUIDs found in error table
     - `missing` → UUIDs not found
   - Validates UUID format before checking.
+
+- **mapFix compare** → Ensures DB records match parser output after logic changes (e.g. capsToWin fix).
+
+- **upload pipeline** → Automates sanitize → check → error check → parse in one run.
+- **delete mode** → Removes bad records by UUID or map_id.
+- **parseVercel mode** → Allows direct comparison against parser output without Worker routing.
 
 ---
 

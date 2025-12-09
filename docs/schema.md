@@ -113,6 +113,12 @@ Example payload:
   "timestamp_uploaded": 1764552812612
 }
 
+### Additional Fields
+
+- `caps_to_win`: integer, or `-1` for maps with "pups" win condition. Default to 1
+- `allow_blue_caps`: boolean, indicates if blue team caps are valid.
+- `team_caps`: boolean, indicates if caps are counted per team rather than per player to account for mars ball team caps.
+
 ---
 
 ## Summary Fields
@@ -141,3 +147,5 @@ Example summary:
 - Error visibility: all failures captured with messages; malformed UUIDs allowed as NULL.
 - Operational clarity: separate tables reflect distinct outcomes (completed, incomplete, no-player, error), aiding analytics and audits.
 - Summaries provide quick feedback for Discord bot replies and migration logs.
+- In team modes (`team_caps = true`), caps are accumulated per side. The `capping_player` field may be null if multiple teammates split caps.
+- This prevents misattribution in maps where `caps_to_win > 1` (e.g. Mars Ball scenarios).
