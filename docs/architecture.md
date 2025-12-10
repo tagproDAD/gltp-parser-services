@@ -68,6 +68,23 @@ Cloudflare Worker (validation + routing)
   - No players → `gltp_no_player_records`.
   - Errors (parser/DB) → `gltp_errors`.
 
+## Data Flow (Grav Bot Delayed Upload)
+```
+Grav Bot
+   ↓ (call /delayed-upload at game start)
+Cloudflare Worker (queue request)
+   ↓ (store UUID + origin in KV)
+Cloudflare KV (DELAYED_REPLAYS)
+   ↓ (cron job every 15 minutes)
+Cloudflare Worker (scheduled handler)
+   ↓ (forward to parser once ≥65 minutes old)
+Vercel Parser (business logic)
+   ↓ (fetch replay data from tagpro and parse)
+Cloudflare Worker (validation + routing)
+   ↓ (insert into correct table)
+```
+
+
 ## Worker API Surface
 - `POST /parse` → Delegates to Vercel; inserts into the correct table; returns summary and upload status (`201 inserted`, `409 duplicate`).
 - `POST /check-uuids` → Batch verify UUIDs across `records`, `incomplete`, `noplayers` with source counts and missing list. Max batch size: 100.

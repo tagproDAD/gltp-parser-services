@@ -17,12 +17,28 @@ The system consists of several components working together:
 - **Discord Bot** → Allows players to submit and check records directly in Discord.
 - **Local Scripts** → Developer utilities for migration, verification, and testing.
 
-**Workflow:**
+**Workflow 1 (standard upload):**
 ```
 Discord Bot
    ↓ (submit UUID)
 Cloudflare Worker (API gateway)
    ↓ (forward to parser)
+Vercel Parser (business logic)
+   ↓ (fetch replay data from tagpro and parse)
+Cloudflare Worker (validation + routing)
+   ↓ (insert into correct table)
+```
+
+## Workflow 2 (delayed upload):
+```
+Grav Bot
+   ↓ (call /delayed-upload at game start)
+Cloudflare Worker (queue request)
+   ↓ (store UUID + origin in KV)
+Cloudflare KV (DELAYED_REPLAYS)
+   ↓ (cron job every 15 minutes)
+Cloudflare Worker (scheduled handler)
+   ↓ (forward to parser once ≥65 minutes old)
 Vercel Parser (business logic)
    ↓ (fetch replay data from tagpro and parse)
 Cloudflare Worker (validation + routing)
