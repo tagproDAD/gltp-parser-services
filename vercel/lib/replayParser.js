@@ -159,6 +159,8 @@ function getDetails(replay, maps) {
 
       let lastScoreR = 0;
       let lastScoreB = 0;
+      let lastScoreEventTsR = null;
+      let lastScoreEventTsB = null;
       let lastTeamCapEvent = null;
 
       if (capsToWin === -1) {
@@ -175,10 +177,12 @@ function getDetails(replay, maps) {
         // Track score changes
         if (type === "score") {
           if (data.r > lastScoreR) {
-            lastTeamCapEvent = { ts, team: 1 }; // red scored
+            lastTeamCapEvent = { ts, team: 1 };
+            lastScoreEventTsR = ts; // red scored
           }
           if (data.b > lastScoreB) {
-            lastTeamCapEvent = { ts, team: 2 }; // blue scored
+            lastTeamCapEvent = { ts, team: 2 };
+            lastScoreEventTsB = ts; // blue scored
           }
           lastScoreR = data.r;
           lastScoreB = data.b;
@@ -201,17 +205,11 @@ function getDetails(replay, maps) {
           // Respect allowBlueCaps
           if (teamNow === 2 && !allowBlueCaps) continue;
 
-          if (lastTeamCapEvent) {
-            if (lastTeamCapEvent.team != teamNow && ts >= lastTeamCapEvent.ts) {
-              continue;
-            }
-          } 
-
           if (delta <= 0) continue;
 
           if (teamCapsMode) {
             // Team mode: accumulate per side
-            if (teamNow === 1) {
+            if (teamNow === 1 && lastScoreEventTsR && ts >= lastScoreEventTsR) {
               redCaps += delta;
               if (redCaps >= capsToWin && recordTime === null) {
                 recordTime = ts - firstTimerTs;
@@ -219,7 +217,7 @@ function getDetails(replay, maps) {
                 cappingUserName = p?.name ?? null;
                 cappingUserId = p?.user_id ?? null;
               }
-            } else if (teamNow === 2 && allowBlueCaps) {
+            } else if (teamNow === 2 && allowBlueCaps && lastScoreEventTsB && ts >= lastScoreEventTsB) {
               blueCaps += delta;
               if (blueCaps >= capsToWin && recordTime === null) {
                 recordTime = ts - firstTimerTs;
