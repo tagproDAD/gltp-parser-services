@@ -94,3 +94,8 @@ The `mapFix.js` script supports two modes:
 
 This tool is used during cleanup of legacy records affected by capsToWin attribution bugs.
 
+### Delayed Uploads During Migration
+
+- For legacy UUIDs, use direct `/parse` or scripts.
+- For live games, prefer `/delayed-upload` to ensure replay availability.
+- Cron ensures eventual consistency without manual retries.

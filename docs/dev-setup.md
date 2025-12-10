@@ -90,3 +90,10 @@ Logging:
 - `pipeline` → End‑to‑end workflow: sanitize → check → error check → parse
 
 Scripts produce local JSON artifacts for auditability (parsed results, missing UUIDs).
+
+## Delayed Upload Testing
+
+- `/delayed-upload` can be tested by posting `{ input: "<uuid>", origin: "local-test" }` to the Worker.
+- KV entries can be inspected via Wrangler (`wrangler kv:key list`).
+- Cron job runs every 15 minutes automatically; simulate locally by calling `scheduled()` handler.
+

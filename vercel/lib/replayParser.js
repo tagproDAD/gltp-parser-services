@@ -1,11 +1,59 @@
 import { fetchMaps } from "./spreadsheet.js";
 import { extractUUID } from "./validation.js";
+import fs from "fs";
+import path from "path";
+import fetch from "node-fetch";
+import { fileURLToPath } from "url";
+
+//TODO move to env
+const isLocal = false;
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 function parseBool(val) {
   if (val === true || val === false) return val;
   if (val == null) return false;
   const s = String(val).trim().toLowerCase();
   return s === "true" || s === "1";
+}
+
+export async function fetchReplayLocal(uuid) {
+  // Go up two levels: from vercel/lib → project-root
+  const baseDir = path.resolve(__dirname, "../../downloadedReplays", uuid);
+  const replayPath = path.join(baseDir, "replay.json");
+  const metaPath = path.join(baseDir, "metadata.json");
+
+  // 1. If already cached, load from disk
+  if (fs.existsSync(replayPath) && fs.existsSync(metaPath)) {
+    const text = fs.readFileSync(replayPath, "utf8");
+    return text.trim().split("\n").map(line => JSON.parse(line));
+  }
+
+  console.log('have to fetch ', uuid);
+  // 2. Fetch metadata
+  const metaRes = await fetch(`https://tagpro.koalabeast.com/replays/data?uuid=${uuid}`);
+  if (!metaRes.ok) throw new Error("Failed to fetch metadata");
+  const metadata = await metaRes.json();
+  if (!metadata.games || metadata.games.length !== 1) {
+    throw new Error("Unexpected replay format");
+  }
+
+  const gameId = metadata.games[0].id;
+  const mapId = metadata.games[0].mapId; // useful for later reorg
+
+  // 3. Fetch replay data
+  const replayRes = await fetch(`https://tagpro.koalabeast.com/replays/gameFile?gameId=${gameId}`);
+  if (!replayRes.ok) throw new Error("Failed to fetch replay data");
+  const text = await replayRes.text();
+
+  // 4. Save locally
+  fs.mkdirSync(baseDir, { recursive: true });
+  fs.writeFileSync(replayPath, text);
+  fs.writeFileSync(metaPath, JSON.stringify({ uuid, gameId, mapId, ...metadata }, null, 2));
+
+  // 5. Parse and return
+  return text.trim().split("\n").map(line => JSON.parse(line));
 }
 
 export async function fetchReplay(uuid) {
@@ -26,7 +74,12 @@ export async function fetchReplay(uuid) {
 
 export async function parseReplayFromUUID(uuidLink) {
   const uuid = extractUUID(uuidLink) || uuidLink;
-  const replay = await fetchReplay(uuid);
+  let replay;
+  if (isLocal) {
+    replay = await fetchReplayLocal(uuid);
+  } else {
+    replay = await fetchReplay(uuid);
+  }
   const maps = await fetchMaps();
   return getDetails(replay, maps);
 }
@@ -229,6 +282,16 @@ function getDetails(replay, maps) {
           } else {
             // Non-team mode: any valid delta counts
             if (delta < capsToWin) continue;
+            // Require a score event for either red or blue
+            if (
+              !(
+                (lastScoreEventTsR && ts >= lastScoreEventTsR) ||
+                (lastScoreEventTsB && ts >= lastScoreEventTsB && allowBlueCaps)
+              )
+            ) {
+              continue;
+            }
+
             recordTime = ts - firstTimerTs;
             const p = playersBySession.get(sid);
             cappingUserName = p?.name ?? null;

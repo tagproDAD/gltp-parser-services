@@ -93,6 +93,18 @@ Responses are standardized with `jsonResponse`/`errorResponse`. Summaries are pr
   - `capping_player_quote`, `caps_to_win`, `allow_blue_caps`, `total_jumps`
   - `origin`, `timestamp_uploaded` (added at submission)
 
+## Delayed Upload Workflow
+
+- **Problem**: TagPro replays are not always immediately available when a game ends. Maximum game time can be 60 minutes, so early uploads may fail.
+- **Solution**: Introduce `/delayed-upload` endpoint and a Cloudflare KV + cron job system.
+- **Flow**:
+  1. Grav bot calls `/delayed-upload` at the start of a game.
+  2. Worker stores the UUID in `DELAYED_REPLAYS` KV with timestamp + origin.
+  3. Cloudflare cron runs every 15 minutes.
+  4. Cron checks KV entries; if a UUID is ≥65 minutes old, it calls `/parse` internally.
+  5. Successful parses are inserted into DB; KV entry is deleted. Failed parses remain for retry.
+
+
 ## Map ID Resolution Nuance
 - Replay’s `actual_map_id` is extracted from `mapfile`.
 - Final `map_id` is resolved via spreadsheet:
@@ -120,6 +132,7 @@ Responses are standardized with `jsonResponse`/`errorResponse`. Summaries are pr
 - **Rate limits & logging**
   - TagPro and Cloudflare can rate limit; scripts use sleeps (3s for parse, 1s for checks).
   - Logging on free tiers is limited; use local dev servers for debugging.
+  
 
 ## Related Repositories
 - GLTP Website (maps, leaderboards, profiles, league): https://github.com/BambiTP/GLTP

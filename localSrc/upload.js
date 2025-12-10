@@ -4,13 +4,32 @@ import fs from "fs";
 const WORKER_PARSE_URL = `https://gltp.fwotagprodad.workers.dev/parse`;
 const VERCEL_PARSE_URL = 'http://localhost:3000/api/parse'
 //const WORKER_PARSE_URL = 'http://127.0.0.1:8787/parse';
-const WORKER_CHECK_URL = `https://gltp.fwotagprodad.workers.dev/check-uuids`;
-const WORKER_CHECK_ERRORS_URL = `https://gltp.fwotagprodad.workers.dev/check-errors`;
+const WORKER_CHECK_URL = "https://gltp.fwotagprodad.workers.dev/check-uuids";
+const WORKER_CHECK_ERRORS_URL = "https://gltp.fwotagprodad.workers.dev/check-errors";
 const WORKER_DELETE_URL = "https://gltp.fwotagprodad.workers.dev/delete-record";
+const DELAYED_WORKER_URL = "https://gltp.fwotagprodad.workers.dev/delayed-upload";
 
 // Helper: sleep for ms milliseconds
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function testDelayedUpload() {
+  const uuid = "f7569a6e-3ace-4181-b939-5ca987fbc8f7"; // sample UUID
+  const origin = "local-test-script";
+
+  try {
+    const res = await fetch(DELAYED_WORKER_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ input: uuid, origin })
+    });
+
+    const data = await res.json();
+    console.log("Response from /delayed-upload:", data);
+  } catch (err) {
+    console.error("Error calling /delayed-upload:", err);
+  }
 }
 
 async function parseWithVercel(uuid) {
@@ -430,6 +449,8 @@ if (mode === "parse") {
     runDelete();
 } else if (mode === "pipeline") {
   runPipeline();
+} else if (mode === "delay") {
+  testDelayedUpload();
 } else {
   console.log("Usage: node script.js [parse|check|checkErrors|extract|sanitize|compare]");
 } 

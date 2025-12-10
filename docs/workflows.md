@@ -22,7 +22,18 @@
    - Worker responds with a summary (map, player, time).
    - Discord bot displays the summary to the user.
 
+### Delayed Uploads
+
+- **Endpoint**: `POST /delayed-upload`
+- **Purpose**: Queue UUIDs at game start to avoid premature parsing.
+- **Storage**: UUIDs saved in Cloudflare KV (`DELAYED_REPLAYS`) with timestamp and origin.
+- **Processing**: Cron job runs every 15 minutes, checks KV entries, and processes UUIDs ≥65 minutes old.
+- **Outcome**:
+  - Success → record inserted into DB, KV entry removed.
+  - Failure → KV entry retained for retry on next cron run.
+
 ---
+
 
 ## Error Handling
 

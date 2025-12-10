@@ -149,3 +149,10 @@ Example summary:
 - Summaries provide quick feedback for Discord bot replies and migration logs.
 - In team modes (`team_caps = true`), caps are accumulated per side. The `capping_player` field may be null if multiple teammates split caps.
 - This prevents misattribution in maps where `caps_to_win > 1` (e.g. Mars Ball scenarios).
+
+### Delayed Upload Notes
+
+- UUIDs queued in KV store with metadata: `{ origin, timestamp }`.
+- Ensures replay availability by delaying parse until ≥65 minutes after game start.
+- Prevents premature errors when TagPro replay is not yet ready.
+
