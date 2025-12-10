@@ -1,7 +1,5 @@
 import { fetchMaps } from "./spreadsheet.js";
 import { extractUUID } from "./validation.js";
-import fetch from "node-fetch";
-
 
 function parseBool(val) {
   if (val === true || val === false) return val;
