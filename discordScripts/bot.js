@@ -1,12 +1,15 @@
 // bot.js
-import { Client, GatewayIntentBits } from "discord.js";
+import { Client, GatewayIntentBits, EmbedBuilder } from "discord.js";
 import fetch from "node-fetch";
 import { sanitizeReplayInput } from "./sanitizeInput.js";
 
 // Replace with your bot token and Worker details
 const DISCORD_TOKEN = "";
-const CHANNELS = [""]; // allowed channel IDs
-const WORKER_URL = "";
+const CHANNELS = []; // allowed channel IDs
+const WORKER_URL = "https://gltp.fwotagprodad.workers.dev";
+//const WR_CHANNEL_ID = ""; //test server
+const WR_CHANNEL_ID = "";
+
 
 const client = new Client({
   intents: [
@@ -23,18 +26,6 @@ function formatTime(ms) {
   return `${minutes}:${seconds.toString().padStart(2, "0")}.${millis
     .toString()
     .padStart(3, "0")}`;
-}
-
-// Quick validation
-function validateInput(input) {
-  const validPrefix = "https://tagpro.koalabeast.com/";
-  if (input.startsWith(validPrefix)) {
-    if (input.includes("replay=")) return "replay";
-    if (input.includes("uuid=")) return "uuid";
-  }
-  const uuidRegex = /^[0-9a-f-]{36}$/i;
-  if (uuidRegex.test(input)) return "uuid";
-  return "invalid";
 }
 
 // Upload helper (calls Worker /parse)
@@ -160,6 +151,9 @@ client.once("clientReady", async () => {
   } catch (err) {
     console.error("❌ Failed to fetch channel messages:", err);
   }
+
+  // WR announcement scheduler
+  setInterval(checkWRs, 10 * 60 * 1000); // every 15 minutes
 });
 
 // Real-time handler
@@ -224,5 +218,82 @@ client.on("messageCreate", async (message) => {
     await uploadRecord(sanitized, message);
   }
 });
+
+function buildWRAnnounceEmbed(newRecords, lastAnnouncedTs) {
+  const embed = new EmbedBuilder()
+    .setTitle("🏆 New World Records!")
+    .setColor(0xFFD700) // default gold
+    .setDescription("\n") // top spacing
+
+  for (const record of newRecords) {
+    const isNewTime = record.timestamp_uploaded_time > lastAnnouncedTs;
+    const isNewJumps = record.timestamp_uploaded_jumps > lastAnnouncedTs;
+
+    let value = "";
+    let color = 0xFFD700; // gold by default
+
+    if (isNewTime && isNewJumps) {
+      // Both WRs are new
+      color = 0x00FF7F; // green for dual achievement
+      if (record.player_time === record.player_jumps) {
+        value = `👤 **${record.player_time}** set both!\n⏱️ Fastest Time: \`${formatTime(record.fastestTime)}\`\n🦘 Min Jumps: \`${record.minJumps}\``;
+      } else {
+        value = `⏱️ Fastest Time: \`${formatTime(record.fastestTime)}\` by **${record.player_time}**\n🦘 Min Jumps: \`${record.minJumps}\` by **${record.player_jumps}**`;
+      }
+    } else if (isNewTime) {
+      color = 0xFFD700; // gold for time WR
+      value = `⏱️ Fastest Time: \`${formatTime(record.fastestTime)}\` by **${record.player_time}**`;
+    } else if (isNewJumps) {
+      color = 0x1E90FF; // blue for jumps WR
+      value = `🦘 Min Jumps: \`${record.minJumps}\` by **${record.player_jumps}**`;
+    }
+
+    if (value) {
+      embed.addFields({
+        name: record.map_name || `Map ${record.map_id}`,
+        value: value,
+        inline: false
+      });
+      embed.addFields({ name: "\u200B", value: "\u200B" });
+    }
+
+    // Update embed color to reflect the type of WR
+    embed.setColor(color);
+  }
+
+  // Add footer showing batch size
+  embed.setFooter({ text: `\nGLTP Tracker • ${newRecords.length} WR${newRecords.length > 1 ? "s" : ""} announced` });
+
+  return embed;
+}
+
+async function checkWRs() {
+  //console.log("checking for new wrs");
+  try {
+    const wrs = await fetch(`${WORKER_URL}/wrs`).then(r => r.json());
+    const wrChannel = await client.channels.fetch(WR_CHANNEL_ID);
+
+    const lastMsg = (await wrChannel.messages.fetch({ limit: 1 })).first();
+    const lastAnnouncedTs = lastMsg ? lastMsg.createdTimestamp : 0;
+
+    const newRecords = [];
+    for (const [mapId, record] of Object.entries(wrs)) {
+      const isNewTime = Number(record.timestamp_uploaded_time) > lastAnnouncedTs;
+      const isNewJumps = Number(record.timestamp_uploaded_jumps) > lastAnnouncedTs;
+
+      if (isNewTime || isNewJumps) {
+        newRecords.push({ map_id: mapId, ...record });
+      }
+    }
+
+    if (newRecords.length > 0) {
+      const embed = buildWRAnnounceEmbed(newRecords, lastAnnouncedTs);
+      await wrChannel.send({ embeds: [embed] });
+    }
+  } catch (err) {
+    console.error("❌ WR check failed:", err);
+  }
+}
+
 
 client.login(DISCORD_TOKEN);

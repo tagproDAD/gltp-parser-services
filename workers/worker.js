@@ -9,6 +9,10 @@ const VERCEL_PARSER_URL = "https://gltp-parser-services.vercel.app/api/parse";
 const WORKER_PARSE_URL = "https://gltp.fwotagprodad.workers.dev/parse";
 //const VERCEL_PARSER_URL = "http://localhost:3000/api/parse";
 
+let cachedWRs = null;
+let lastFetch = 0;
+const CACHE_TTL = 15 * 60 * 1000; // 5 minutes in memory
+
 export default {
     async fetch(request, env, ctx) {
         try {
@@ -26,6 +30,89 @@ export default {
                 },
             });
             }
+
+            if (request.method === "GET" && path === "/wrs") {
+                const now = Date.now();
+
+                // Return in-memory cache if still valid
+                if (cachedWRs && now - lastFetch < CACHE_TTL) {
+                    return new Response(JSON.stringify(cachedWRs), {
+                    headers: { "Content-Type": "application/json" }
+                    });
+                }
+
+                // Try edge cache
+                const cache = caches.default;
+                let response = await cache.match(request);
+                if (response) return response;
+
+                try {
+                    // Query D1 for WRs (fastest time + min jumps)
+                    const rows = await env.DB.prepare(`
+                    WITH fastest AS (
+                        SELECT *,
+                            ROW_NUMBER() OVER (
+                                PARTITION BY map_id
+                                ORDER BY record_time ASC
+                            ) AS rn
+                        FROM gltp_records
+                    ),
+                    minjumps AS (
+                        SELECT *,
+                            ROW_NUMBER() OVER (
+                                PARTITION BY map_id
+                                ORDER BY total_jumps ASC, record_time ASC
+                            ) AS rn
+                        FROM gltp_records
+                    )
+                    SELECT f.map_id,
+                            f.map_name,
+                            f.capping_player AS player_time,
+                            f.record_time AS fastestTime,
+                            f.inserted_at AS timestamp_uploaded_time,
+                            j.capping_player AS player_jumps,
+                            j.total_jumps AS minJumps,
+                            j.inserted_at AS timestamp_uploaded_jumps
+                    FROM fastest f
+                    JOIN minjumps j ON f.map_id = j.map_id
+                    WHERE f.rn = 1 AND j.rn = 1;
+                    `).all();
+
+                    const wrs = {};
+                    for (const r of rows.results || []) {
+                    wrs[r.map_id] = {
+                        map_name: r.map_name,
+                        fastestTime: r.fastestTime,
+                        player_time: r.player_time,
+                        timestamp_uploaded_time: new Date(r.timestamp_uploaded_time).getTime(),
+                        minJumps: r.minJumps,
+                        player_jumps: r.player_jumps,
+                        timestamp_uploaded_jumps: new Date(r.timestamp_uploaded_jumps).getTime()
+                    };
+                    }
+
+                    // Cache in memory
+                    cachedWRs = wrs;
+                    lastFetch = now;
+
+                    // Cache at the edge for future requests
+                    response = new Response(JSON.stringify(wrs), {
+                    headers: {
+                        "Content-Type": "application/json",
+                        "Cache-Control": "s-maxage=900" // 15 minutes at edge
+                    }
+                    });
+                    await cache.put(request, response.clone());
+
+                    return response;
+                } catch (err) {
+                    console.error("❌ Failed to query WRs:", err);
+                    return new Response(JSON.stringify({ error: "DB query failed" }), {
+                    status: 500,
+                    headers: { "Content-Type": "application/json" }
+                    });
+                }
+                }
 
             // GET /records
             if (request.method === "GET" && path === "/records") {
