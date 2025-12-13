@@ -11,13 +11,14 @@ const WORKER_PARSE_URL = "https://gltp.fwotagprodad.workers.dev/parse";
 
 let cachedWRs = null;
 let lastFetch = 0;
-const CACHE_TTL = 15 * 60 * 1000; // 5 minutes in memory
+const CACHE_TTL = 10 * 60 * 1000; // 5 minutes in memory
 
 export default {
     async fetch(request, env, ctx) {
         try {
             const url = new URL(request.url);
             const path = url.pathname;
+            const pathParts = url.pathname.split("/").filter(Boolean);
 
             // OPTIONS preflight
             if (request.method === "OPTIONS") {
@@ -30,6 +31,71 @@ export default {
                 },
             });
             }
+
+            if (request.method === "GET" && pathParts[0] === "pb" && pathParts[1]) {
+                const playerName = decodeURIComponent(pathParts[1]);
+                const mapId = pathParts[2] ? decodeURIComponent(pathParts[2]) : null;
+
+                const ALIASES = {
+                        "FWO": ["FWO", "DAD.", "::"],
+                        "DAD.": ["FWO", "DAD.", "::"],
+                        "::": ["FWO", "DAD.", "::"]
+                    };
+
+                const aliasSet = ALIASES[playerName] || [playerName];
+
+                try {
+                    // Build query
+                    let query = `
+                    SELECT map_id, map_name, record_time, total_jumps, payload, inserted_at
+                    FROM gltp_records
+                    `;
+                    if (mapId) {
+                    query += " WHERE map_id = ?";
+                    }
+
+                    const rows = mapId
+                    ? await env.DB.prepare(query).bind(mapId).all()
+                    : await env.DB.prepare(query).all();
+
+                    const pbs = {};
+                    for (const r of rows.results || []) {
+                        const payload = JSON.parse(r.payload);
+                        const players = payload.players.map(p => p.name);
+
+                        if (players.some(name => aliasSet.includes(name))) {
+                            if (!pbs[r.map_id]) {
+                            pbs[r.map_id] = {
+                                map_name: r.map_name,
+                                fastestTime: r.record_time,
+                                minJumps: r.total_jumps,
+                                timestamp_uploaded: new Date(r.inserted_at).getTime()
+                            };
+                            } else {
+                            if (r.record_time < pbs[r.map_id].fastestTime) {
+                                pbs[r.map_id].fastestTime = r.record_time;
+                                pbs[r.map_id].timestamp_uploaded = new Date(r.inserted_at).getTime();
+                            }
+                            if (r.total_jumps < pbs[r.map_id].minJumps) {
+                                pbs[r.map_id].minJumps = r.total_jumps;
+                                pbs[r.map_id].timestamp_uploaded = new Date(r.inserted_at).getTime();
+                            }
+                            }
+                        }
+                    }
+
+                    return new Response(JSON.stringify(pbs), {
+                    headers: { "Content-Type": "application/json" }
+                    });
+                } catch (err) {
+                    return new Response(JSON.stringify({ error: "Failed to compute PBs", details: err.message }), {
+                    status: 500,
+                    headers: { "Content-Type": "application/json" }
+                    });
+                }
+            }
+
+
 
             if (request.method === "GET" && path === "/wrs") {
                 const now = Date.now();
@@ -67,9 +133,11 @@ export default {
                     )
                     SELECT f.map_id,
                             f.map_name,
+                            f.uuid AS uuid_time,
                             f.capping_player AS player_time,
                             f.record_time AS fastestTime,
                             f.inserted_at AS timestamp_uploaded_time,
+                            j.uuid AS uuid_jumps,
                             j.capping_player AS player_jumps,
                             j.total_jumps AS minJumps,
                             j.inserted_at AS timestamp_uploaded_jumps
@@ -84,9 +152,11 @@ export default {
                         map_name: r.map_name,
                         fastestTime: r.fastestTime,
                         player_time: r.player_time,
+                        uuid_time: r.uuid_time,
                         timestamp_uploaded_time: new Date(r.timestamp_uploaded_time).getTime(),
                         minJumps: r.minJumps,
                         player_jumps: r.player_jumps,
+                        uuid_jumps: r.uuid_jumps,
                         timestamp_uploaded_jumps: new Date(r.timestamp_uploaded_jumps).getTime()
                     };
                     }
@@ -112,7 +182,7 @@ export default {
                     headers: { "Content-Type": "application/json" }
                     });
                 }
-                }
+            }
 
             // GET /records
             if (request.method === "GET" && path === "/records") {
@@ -133,6 +203,7 @@ export default {
             }
 
             // DELETE /delete-record
+            /*
             if (request.method === "DELETE" && path === "/delete-record") {
                 let body;
                 try {
@@ -165,6 +236,7 @@ export default {
                     return errorResponse("Database error", 500);
                 }
             }
+                */
 
             // GET /noplayers
             if (request.method === "GET" && path === "/noplayers") {

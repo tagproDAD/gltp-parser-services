@@ -153,7 +153,7 @@ client.once("clientReady", async () => {
   }
 
   // WR announcement scheduler
-  setInterval(checkWRs, 10 * 60 * 1000); // every 15 minutes
+  setInterval(checkWRs, 10 * 60 * 1000); // every 10 minutes
 });
 
 // Real-time handler
@@ -222,53 +222,70 @@ client.on("messageCreate", async (message) => {
 function buildWRAnnounceEmbed(newRecords, lastAnnouncedTs) {
   const embed = new EmbedBuilder()
     .setTitle("🏆 New World Records!")
-    .setColor(0xFFD700) // default gold
-    .setDescription("\n") // top spacing
+    .setColor(0xFFD700)
+    .setDescription("\n");
 
   for (const record of newRecords) {
     const isNewTime = record.timestamp_uploaded_time > lastAnnouncedTs;
     const isNewJumps = record.timestamp_uploaded_jumps > lastAnnouncedTs;
 
+    const replayTimeLink = record.uuid_time
+      ? `https://tagpro.koalabeast.com/replays?uuid=${record.uuid_time}`
+      : null;
+    const replayJumpsLink = record.uuid_jumps
+      ? `https://tagpro.koalabeast.com/replays?uuid=${record.uuid_jumps}`
+      : null;
+
     let value = "";
-    let color = 0xFFD700; // gold by default
 
     if (isNewTime && isNewJumps) {
-      // Both WRs are new
-      color = 0x00FF7F; // green for dual achievement
-      if (record.player_time === record.player_jumps) {
-        value = `👤 **${record.player_time}** set both!\n⏱️ Fastest Time: \`${formatTime(record.fastestTime)}\`\n🦘 Min Jumps: \`${record.minJumps}\``;
+      if (record.player_time === record.player_jumps && replayTimeLink === replayJumpsLink) {
+        // Same player, same run → one replay link
+        value =
+          `👤 **${record.player_time}** set both!\n` +
+          `⏱️ Fastest Time: \`${formatTime(record.fastestTime)}\`\n` +
+          `🦘 Min Jumps: \`${record.minJumps}\`\n` +
+          `[Replay](${replayTimeLink})`;
       } else {
-        value = `⏱️ Fastest Time: \`${formatTime(record.fastestTime)}\` by **${record.player_time}**\n🦘 Min Jumps: \`${record.minJumps}\` by **${record.player_jumps}**`;
+        // Different players or different runs
+        value =
+          `👤 **${record.player_time}**\n` +
+          `⏱️ Fastest Time: \`${formatTime(record.fastestTime)}\`\n` +
+          `[Replay](${replayTimeLink})\n\n` +
+          `👤 **${record.player_jumps}**\n` +
+          `🦘 Min Jumps: \`${record.minJumps}\`\n` +
+          `[Replay](${replayJumpsLink})`;
       }
     } else if (isNewTime) {
-      color = 0xFFD700; // gold for time WR
-      value = `⏱️ Fastest Time: \`${formatTime(record.fastestTime)}\` by **${record.player_time}**`;
+      value =
+        `👤 **${record.player_time}**\n` +
+        `⏱️ Fastest Time: \`${formatTime(record.fastestTime)}\`\n` +
+        `[Replay](${replayTimeLink})`;
     } else if (isNewJumps) {
-      color = 0x1E90FF; // blue for jumps WR
-      value = `🦘 Min Jumps: \`${record.minJumps}\` by **${record.player_jumps}**`;
+      value =
+        `👤 **${record.player_jumps}**\n` +
+        `🦘 Min Jumps: \`${record.minJumps}\`\n` +
+        `[Replay](${replayJumpsLink})`;
     }
 
     if (value) {
       embed.addFields({
         name: record.map_name || `Map ${record.map_id}`,
-        value: value,
+        value: value + "\n",
         inline: false
       });
-      embed.addFields({ name: "\u200B", value: "\u200B" });
     }
-
-    // Update embed color to reflect the type of WR
-    embed.setColor(color);
   }
 
-  // Add footer showing batch size
-  embed.setFooter({ text: `\nGLTP Tracker • ${newRecords.length} WR${newRecords.length > 1 ? "s" : ""} announced` });
+  embed.setFooter({
+    text: `\nGLTP Tracker • ${newRecords.length} WR${newRecords.length > 1 ? "s" : ""} announced`
+  });
 
   return embed;
 }
 
+
 async function checkWRs() {
-  //console.log("checking for new wrs");
   try {
     const wrs = await fetch(`${WORKER_URL}/wrs`).then(r => r.json());
     const wrChannel = await client.channels.fetch(WR_CHANNEL_ID);
@@ -287,8 +304,34 @@ async function checkWRs() {
     }
 
     if (newRecords.length > 0) {
-      const embed = buildWRAnnounceEmbed(newRecords, lastAnnouncedTs);
-      await wrChannel.send({ embeds: [embed] });
+      const total = newRecords.length;
+      const batches = Math.ceil(total / 20);
+
+      // Only send summary if more than one batch is needed
+      if (batches > 1) {
+        const summaryEmbed = new EmbedBuilder()
+          .setTitle("📦 WR Announcement Summary")
+          .setColor(0xFFD700)
+          .setDescription(
+            `🏆 ${total} WR${total > 1 ? "s" : ""} announced!\n` +
+            `Splitting into ${batches} batches...`
+          )
+          .setFooter({ text: "GLTP Tracker" });
+
+        await wrChannel.send({ embeds: [summaryEmbed] });
+      }
+
+      // Send detailed embeds in batches
+      for (let i = 0; i < total; i += 20) {
+        const chunk = newRecords.slice(i, i + 20);
+        const embed = buildWRAnnounceEmbed(chunk, lastAnnouncedTs);
+
+        embed.setFooter({
+          text: `GLTP Tracker • Batch ${Math.floor(i / 20) + 1} of ${batches} • ${chunk.length} WR${chunk.length > 1 ? "s" : ""}`
+        });
+
+        await wrChannel.send({ embeds: [embed] });
+      }
     }
   } catch (err) {
     console.error("❌ WR check failed:", err);

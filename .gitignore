@@ -168,3 +168,6 @@ localSrc/currentRecords.json
 localSrc/deleted-results.json
 localSrc/sbarmyUUIDDump.txt
 localSrc/uuidsSanitized.json
+localSrc/parsed-results.json
+localSrc/records - Copy.json
+localSrc/records.json

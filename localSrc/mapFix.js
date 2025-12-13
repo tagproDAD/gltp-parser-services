@@ -14,6 +14,11 @@ if (mode === "delete") {
   console.log("Usage: node script.js [delete||compare]");
 }
 
+// Helper: sleep for ms milliseconds
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 async function runDelete() {
   const targetMapId = "86870";
   if (!targetMapId) {
@@ -101,7 +106,6 @@ async function main() {
     const uuid = record.uuid;
     const parsedRecord = await parseWithVercel(uuid);
     if (!parsedRecord) continue;
-    if (Number(parsedRecord["caps_to_win"]) === -1) continue;
 
 
     for (const field of fieldsToCheck) {
@@ -118,6 +122,7 @@ async function main() {
       }
     }
 
+    //await sleep(2000);
     // Every 100 records, output batch summary
     if ((i + 1) % 100 === 0) {
       console.log(`\n=== Differences for records ${i - 99} to ${i + 1} ===`);
@@ -127,6 +132,7 @@ async function main() {
         console.log("NO diff");
       }
       batchDiffs = []; // reset batch
+      //await sleep(10000);
     }
   }
 
@@ -142,5 +148,3 @@ async function main() {
   console.log("\n=== Mismatch Counts by Field ===");
   console.table(fieldCounts);
 }
-
-main();
