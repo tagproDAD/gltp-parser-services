@@ -34,6 +34,8 @@ export async function fetchMaps() {
       allow_blue_caps: get(row, "Allow Blue Caps").toUpperCase() === "TRUE",
       balls_req: get(row, "Min\nBalls \nRec"),
       max_balls_rec: get(row, "Max\nBalls\nRec"),
+      allow_from_spawn: get(row, "From Spawn"),
+      allow_from_grab: get(row, "From Grab"),
     }))
     .filter(m => m.preset && m.preset.trim());
 

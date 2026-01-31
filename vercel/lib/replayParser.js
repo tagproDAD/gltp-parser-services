@@ -51,9 +51,9 @@ function resolveMap(mapId, maps) {
   let matched = maps.find(m => String(m.map_id) === String(mapId));
   if (matched) return matched;
 
-  // Try equivalent IDs (fixed strict string compare)
+  // Try equivalent IDs
   return maps.find(m =>
-    m.equivalent_map_ids?.some(id => String(id) === String(mapId)) // FIXED
+    m.equivalent_map_ids?.some(id => String(id) === String(mapId))
   );
 }
 
@@ -119,11 +119,12 @@ function getDetails(replay, maps) {
 
     let p = playersBySession.get(sid);
     if (!p) {
-      playersBySession.set(sid, {
+      p = {
         sessionId: sid,
         name: pd.name ?? meta?.displayName ?? `Player${pd.id}`,
-        user_id: meta?.userId ?? null,
-      });
+        user_id: meta?.userId ?? null
+      };
+      playersBySession.set(sid, p);
     } else {
       p.name = pd.name ?? p.name;
     }
@@ -139,150 +140,330 @@ function getDetails(replay, maps) {
   }
 
   function detectCapture(replay, {
-      teamCapsMode,
-      allowBlueCaps,
-      capsToWin,
-      firstTimerTs,
-      playersBySession,
-      idToSession,
-      sessionTeam
-    }) {
-      const lastCapturesBySession = new Map();
+    teamCapsMode,
+    allowBlueCaps,
+    capsToWin,
+    firstTimerTs,
+    allowFromSpawn,
+    allowFromGrab,
+    playersBySession,
+    idToSession,
+    sessionTeam
+  }) {
+    const lastCapturesBySession = new Map();
+    const runStartTsBySession = new Map(); // per-session run start
 
-      let recordTime = null;
-      let cappingUserName = null;
-      let cappingUserId = null;
-      let cappingPlayerQuote = null;
-      let total_jumps = 0;
+    let recordTime = null;
+    let cappingUserName = null;
+    let cappingUserId = null;
+    let cappingPlayerQuote = null;
+    let total_jumps = 0;
 
-      let redCaps = 0;
-      let blueCaps = 0;
+    let redCaps = 0;
+    let blueCaps = 0;
 
-      let lastScoreR = 0;
-      let lastScoreB = 0;
-      let lastScoreEventTsR = null;
-      let lastScoreEventTsB = null;
-      let lastTeamCapEvent = null;
+    let lastScoreR = 0;
+    let lastScoreB = 0;
+    let lastScoreEventTsR = null;
+    let lastScoreEventTsB = null;
+    let lastTeamCapEvent = null;
 
-      if (capsToWin === -1) {
-        return {
-          recordTime: null,
-          cappingUserName: null,
-          cappingUserId: null,
-          cappingPlayerQuote: null,
-          totalJumps: null,
-        };
-      }
-
-      for (const [ts, type, data] of replay) {
-        // Track score changes
-        if (type === "score") {
-          if (data.r > lastScoreR) {
-            lastTeamCapEvent = { ts, team: 1 };
-            lastScoreEventTsR = ts; // red scored
-          }
-          if (data.b > lastScoreB) {
-            lastTeamCapEvent = { ts, team: 2 };
-            lastScoreEventTsB = ts; // blue scored
-          }
-          lastScoreR = data.r;
-          lastScoreB = data.b;
-          continue;
-        } else if (type !== "p") {
-          continue;
-        }
-
-        for (const pd of data) {
-          const sid = ensureSessionFromPacket(pd);
-          if (!sid) continue;
-
-          const teamNow = sessionTeam.get(sid);
-          const captures = pd["s-captures"] || 0;
-
-          const prev = lastCapturesBySession.get(sid) || 0;
-          const delta = captures - prev;
-          lastCapturesBySession.set(sid, captures);
-
-          // Respect allowBlueCaps
-          if (teamNow === 2 && !allowBlueCaps) continue;
-
-          if (delta <= 0) continue;
-
-          if (teamCapsMode) {
-            // Team mode: accumulate per side
-            if (teamNow === 1 && lastScoreEventTsR && ts >= lastScoreEventTsR) {
-              redCaps += delta;
-              if (redCaps >= capsToWin && recordTime === null) {
-                recordTime = ts - firstTimerTs;
-                const p = playersBySession.get(sid);
-                cappingUserName = p?.name ?? null;
-                cappingUserId = p?.user_id ?? null;
-              }
-            } else if (teamNow === 2 && allowBlueCaps && lastScoreEventTsB && ts >= lastScoreEventTsB) {
-              blueCaps += delta;
-              if (blueCaps >= capsToWin && recordTime === null) {
-                recordTime = ts - firstTimerTs;
-                const p = playersBySession.get(sid);
-                cappingUserName = p?.name ?? null;
-                cappingUserId = p?.user_id ?? null;
-              }
-            }
-          } else {
-            // Non-team mode: any valid delta counts
-            if (delta < capsToWin) continue;
-            // Require a score event for either red or blue
-            if (
-              !(
-                (lastScoreEventTsR && ts >= lastScoreEventTsR) ||
-                (lastScoreEventTsB && ts >= lastScoreEventTsB && allowBlueCaps)
-              )
-            ) {
-              continue;
-            }
-
-            recordTime = ts - firstTimerTs;
-            const p = playersBySession.get(sid);
-            cappingUserName = p?.name ?? null;
-            cappingUserId = p?.user_id ?? null;
-          }
-
-          if (recordTime !== null) {
-            // Count jumps until this timestamp
-            total_jumps = replay.reduce((count, r) => {
-              const [ts2, type2, data2] = r;
-              if (
-                ts2 <= ts &&
-                type2 === "replayPlayerMessage" &&
-                data2?.type === "sound" &&
-                data2?.data?.s === "jump"
-              ) {
-                return count + 1;
-              }
-              return count;
-            }, 0);
-
-            // Most recent chat from decisive player
-            const playerChats = replay.filter(
-              r => r[1] === "chat" && idToSession.get(r[2].from) === sid
-            );
-            cappingPlayerQuote = playerChats.length
-              ? playerChats[playerChats.length - 1][2].message
-              : null;
-
-            break;
-          }
-        }
-        if (recordTime !== null) break;
-      }
-
+    if (capsToWin === -1) {
       return {
-        recordTime,
-        cappingUserName,
-        cappingUserId,
-        cappingPlayerQuote,
-        total_jumps
+        recordTime: null,
+        cappingUserName: null,
+        cappingUserId: null,
+        cappingPlayerQuote: null,
+        totalJumps: null,
       };
     }
+
+    for (const [ts, type, data] of replay) {
+      // Track score changes
+      if (type === "score") {
+        if (data.r > lastScoreR) {
+          lastScoreEventTsR = ts; // red scored
+          lastTeamCapEvent = { ts, team: 1 };
+        }
+        if (data.b > lastScoreB) {
+          lastScoreEventTsB = ts; // blue scored
+          lastTeamCapEvent = { ts, team: 2 };
+        }
+        lastScoreR = data.r;
+        lastScoreB = data.b;
+        continue;
+      } else if (type !== "p") {
+        continue;
+      }
+
+      for (const pd of data) {
+        const sid = ensureSessionFromPacket(pd);
+        if (!sid) continue;
+
+        const teamNow = sessionTeam.get(sid);
+
+        // ---------------------------
+        // TIMER RESET LOGIC 
+        // ---------------------------
+
+        // allow_from_spawn: reset when this player is respawned (directSet with not dead)
+        // BUT only after game has started
+        if (
+          allowFromSpawn &&
+          ts >= firstTimerTs &&  // ← Add this check
+          pd.directSet === true &&
+          pd.dead === false
+        ) {
+          runStartTsBySession.set(sid, ts);
+        }
+
+        // allow_from_grab: reset when this player grabs any flag
+        // BUT only after game has started
+        if (
+          allowFromGrab &&
+          ts >= firstTimerTs &&  // ← Add this check
+          pd.flag !== null &&
+          pd.flag !== undefined &&
+          pd.flag > 0
+        ) {
+          const currentStart = runStartTsBySession.get(sid);
+          if (!currentStart || ts > currentStart) {
+            runStartTsBySession.set(sid, ts);
+          }
+        }
+
+        // ---------------------------
+        // CAPTURE DETECTION
+        // ---------------------------
+
+        const captures = pd["s-captures"] || 0;
+
+        const prev = lastCapturesBySession.get(sid) || 0;
+        const delta = captures - prev;
+        lastCapturesBySession.set(sid, captures);
+
+        // Respect allowBlueCaps
+        if (teamNow === 2 && !allowBlueCaps) continue;
+
+        if (delta <= 0) continue;
+
+        if (teamCapsMode) {
+          // Team mode: accumulate per side
+          if (teamNow === 1 && lastScoreEventTsR && ts >= lastScoreEventTsR) {
+            redCaps += delta;
+            if (redCaps >= capsToWin && recordTime === null) {
+              // Use per-session run start if available, otherwise use game start
+              const runStart = runStartTsBySession.get(sid) || firstTimerTs;
+              recordTime = ts - runStart;
+              const p = playersBySession.get(sid);
+              cappingUserName = p?.name ?? null;
+              cappingUserId = p?.user_id ?? null;
+            }
+          } else if (teamNow === 2 && allowBlueCaps && lastScoreEventTsB && ts >= lastScoreEventTsB) {
+            blueCaps += delta;
+            if (blueCaps >= capsToWin && recordTime === null) {
+              const runStart = runStartTsBySession.get(sid) || firstTimerTs;
+              recordTime = ts - runStart;
+              const p = playersBySession.get(sid);
+              cappingUserName = p?.name ?? null;
+              cappingUserId = p?.user_id ?? null;
+            }
+          }
+        } else {
+          // Non-team mode: any valid delta counts
+          if (delta < capsToWin) continue;
+          // Require a score event for either red or blue
+          if (
+            !(
+              (lastScoreEventTsR && ts >= lastScoreEventTsR) ||
+              (lastScoreEventTsB && ts >= lastScoreEventTsB && allowBlueCaps)
+            )
+          ) {
+            continue;
+          }
+
+          // Use per-session run start if available, otherwise use game start
+          const runStart = runStartTsBySession.get(sid) || firstTimerTs;
+          recordTime = ts - runStart;
+          const p = playersBySession.get(sid);
+          cappingUserName = p?.name ?? null;
+          cappingUserId = p?.user_id ?? null;
+        }
+
+        if (recordTime !== null) {
+          // Get the run start for this player
+          const runStart = runStartTsBySession.get(sid) || firstTimerTs;
+          
+          // Count jumps from run start to cap
+          total_jumps = replay.reduce((count, r) => {
+            const [ts2, type2, data2] = r;
+            if (
+              ts2 >= runStart &&  // Changed: only count jumps after run start
+              ts2 <= ts &&
+              type2 === "replayPlayerMessage" &&
+              data2?.type === "sound" &&
+              data2?.data?.s === "jump"
+            ) {
+              return count + 1;
+            }
+            return count;
+          }, 0);
+
+          // Most recent chat from decisive player
+          const playerChats = replay.filter(
+            r => r[1] === "chat" && idToSession.get(r[2].from) === sid
+          );
+          cappingPlayerQuote = playerChats.length
+            ? playerChats[playerChats.length - 1][2].message
+            : null;
+
+          break;
+        }
+      }
+      if (recordTime !== null) break;
+    }
+
+    return {
+      recordTime,
+      cappingUserName,
+      cappingUserId,
+      cappingPlayerQuote,
+      total_jumps
+    };
+  }
+
+  // ---------------------------
+  // RACING MODE: FASTEST LAP
+  // ---------------------------
+  function detectFastestLap(replay, {
+    allowBlueCaps,
+    firstTimerTs,
+    playersBySession,
+    idToSession,
+    sessionTeam
+  }) {
+    // Track per-player lap times
+    const playerLaps = new Map(); // sessionId -> { laps: [{startTs, endTs, lapTime}], lastCapTs }
+    
+    let fastestLapTime = null;
+    let fastestLapPlayer = null;
+    let fastestLapPlayerId = null;
+    let fastestLapPlayerQuote = null;
+    let fastestLapJumps = null;
+    let fastestLapStartTs = null;
+    let fastestLapEndTs = null;
+
+    const lastCapturesBySession = new Map();
+    let lastScoreR = 0;
+    let lastScoreB = 0;
+    let lastScoreEventTsR = null;
+    let lastScoreEventTsB = null;
+
+    for (const [ts, type, data] of replay) {
+      // Track score changes
+      if (type === "score") {
+        if (data.r > lastScoreR) {
+          lastScoreEventTsR = ts;
+        }
+        if (data.b > lastScoreB) {
+          lastScoreEventTsB = ts;
+        }
+        lastScoreR = data.r;
+        lastScoreB = data.b;
+        continue;
+      } else if (type !== "p") {
+        continue;
+      }
+
+      for (const pd of data) {
+        const sid = ensureSessionFromPacket(pd);
+        if (!sid) continue;
+
+        const teamNow = sessionTeam.get(sid);
+        const captures = pd["s-captures"] || 0;
+
+        const prev = lastCapturesBySession.get(sid) || 0;
+        const delta = captures - prev;
+        lastCapturesBySession.set(sid, captures);
+
+        // Respect allowBlueCaps
+        if (teamNow === 2 && !allowBlueCaps) continue;
+
+        if (delta <= 0) continue;
+
+        // Verify score event occurred
+        if (
+          !(
+            (teamNow === 1 && lastScoreEventTsR && ts >= lastScoreEventTsR) ||
+            (teamNow === 2 && allowBlueCaps && lastScoreEventTsB && ts >= lastScoreEventTsB)
+          )
+        ) {
+          continue;
+        }
+
+        // Initialize player lap tracking if needed
+        if (!playerLaps.has(sid)) {
+          playerLaps.set(sid, { laps: [], lastCapTs: firstTimerTs });
+        }
+
+        const playerData = playerLaps.get(sid);
+        const lapStartTs = playerData.lastCapTs;
+        const lapEndTs = ts;
+        const lapTime = lapEndTs - lapStartTs;
+
+        // Record this lap
+        playerData.laps.push({ startTs: lapStartTs, endTs: lapEndTs, lapTime });
+        playerData.lastCapTs = lapEndTs;
+
+        // Check if this is the fastest lap
+        if (fastestLapTime === null || lapTime < fastestLapTime) {
+          fastestLapTime = lapTime;
+          fastestLapStartTs = lapStartTs;
+          fastestLapEndTs = lapEndTs;
+          const p = playersBySession.get(sid);
+          fastestLapPlayer = p?.name ?? null;
+          fastestLapPlayerId = p?.user_id ?? null;
+
+          // Count jumps during this lap
+          fastestLapJumps = replay.reduce((count, r) => {
+            const [ts2, type2, data2] = r;
+            if (
+              ts2 >= lapStartTs &&
+              ts2 <= lapEndTs &&
+              type2 === "replayPlayerMessage" &&
+              data2?.type === "sound" &&
+              data2?.data?.s === "jump"
+            ) {
+              return count + 1;
+            }
+            return count;
+          }, 0);
+
+          // Most recent chat from this player
+          const playerChats = replay.filter(
+            r => r[1] === "chat" && idToSession.get(r[2].from) === sid
+          );
+          fastestLapPlayerQuote = playerChats.length
+            ? playerChats[playerChats.length - 1][2].message
+            : null;
+        }
+      }
+    }
+
+    return {
+      fastestLapTime,
+      fastestLapPlayer,
+      fastestLapPlayerId,
+      fastestLapPlayerQuote,
+      fastestLapJumps,
+      allLaps: Array.from(playerLaps.entries()).map(([sid, data]) => ({
+        sessionId: sid,
+        player: playersBySession.get(sid)?.name,
+        userId: playersBySession.get(sid)?.user_id,
+        laps: data.laps
+      }))
+    };
+  }
 
   const firstTimerTs =
     replay.find(r => r[1] === "time" && r[2]?.state === 1)?.[0] ?? 0;
@@ -294,6 +475,10 @@ function getDetails(replay, maps) {
   let effectiveMapId = actualMapId;
   let allowBlueCaps = false;
   let teamCapsMode = false;
+  let isRacingMode = false;
+  let allowFromSpawn = false;
+  let allowFromGrab = false;
+  let ballsReq = null;
 
   if (matchedMap) {
     if (matchedMap.caps_to_win === "pups") {
@@ -304,43 +489,97 @@ function getDetails(replay, maps) {
     effectiveMapId = matchedMap.map_id;
     allowBlueCaps = parseBool(matchedMap.allow_blue_caps);
     teamCapsMode = parseBool(matchedMap.team_caps);
+    isRacingMode = parseBool(matchedMap.racing_mode);
+    isRacingMode = parseBool(matchedMap.racing_mode);
+    allowFromSpawn = parseBool(matchedMap.allow_from_spawn);
+    allowFromGrab = parseBool(matchedMap.allow_from_grab);
+    ballsReq = matchedMap.balls_req ? parseInt(matchedMap.balls_req, 10) : null;
+  }
+
+  // Count UNIQUE players (by userId) to handle team switch / refreshes
+  const uniqueUserIds = new Set();
+  for (const player of metadata.players) {
+    if (player.userId) {
+      uniqueUserIds.add(player.userId);
+    } else {
+      // For Some Balls (no userId), fall back to sessionId or id
+      uniqueUserIds.add(player.sessionId || player.id);
+    }
+  }
+  const actualPlayerCount = uniqueUserIds.size;
+
+  // Disable allow_from_grab/spawn if TOO MANY unique players
+  if (ballsReq !== null && actualPlayerCount > ballsReq) {
+    allowFromSpawn = false;
+    allowFromGrab = false;
   }
 
   // ---------------------------
   // CAPTURE DETECTION
   // ---------------------------
-    const {
-    recordTime,
-    cappingUserName,
-    cappingUserId,
-    cappingPlayerQuote,
-    total_jumps
-  } = detectCapture(replay, {
+  const speedrunResult = detectCapture(replay, {
     teamCapsMode,
     allowBlueCaps,
     capsToWin,
     firstTimerTs,
+    allowFromSpawn,
+    allowFromGrab,
     playersBySession,
     idToSession,
     sessionTeam
   });
 
+  // ---------------------------
+  // RACING MODE DETECTION
+  // ---------------------------
+  let racingResult = null;
+  if (isRacingMode) {
+    racingResult = detectFastestLap(replay, {
+      allowBlueCaps,
+      firstTimerTs,
+      playersBySession,
+      idToSession,
+      sessionTeam
+    });
+  }
 
-  return {
+  const baseResult = {
     map_name: mapData.info.name,
     map_id: effectiveMapId,
     actual_map_id: actualMapId,
     map_author: mapData.info.author,
     players: Object.values(players),
-    capping_player: cappingUserName,
-    capping_player_user_id: cappingUserId,
-    record_time: recordTime,
     is_solo: Object.keys(players).length === 1,
     timestamp: metadata.started,
     uuid: metadata.uuid,
-    capping_player_quote: cappingPlayerQuote,
     caps_to_win: capsToWin,
     allow_blue_caps: allowBlueCaps,
-    total_jumps,
+    is_racing_mode: isRacingMode,
   };
+
+  // Return racing data if racing mode, otherwise speedrun data
+  if (isRacingMode && racingResult) {
+    return {
+      ...baseResult,
+      fastest_lap_time: racingResult.fastestLapTime,
+      fastest_lap_player: racingResult.fastestLapPlayer,
+      fastest_lap_player_user_id: racingResult.fastestLapPlayerId,
+      fastest_lap_player_quote: racingResult.fastestLapPlayerQuote,
+      fastest_lap_jumps: racingResult.fastestLapJumps,
+      all_laps: racingResult.allLaps,
+      // Keep speedrun data for reference
+      speedrun_record_time: speedrunResult.recordTime,
+      speedrun_capping_player: speedrunResult.cappingUserName,
+      speedrun_total_jumps: speedrunResult.total_jumps,
+    };
+  } else {
+    return {
+      ...baseResult,
+      capping_player: speedrunResult.cappingUserName,
+      capping_player_user_id: speedrunResult.cappingUserId,
+      record_time: speedrunResult.recordTime,
+      capping_player_quote: speedrunResult.cappingPlayerQuote,
+      total_jumps: speedrunResult.total_jumps,
+    };
+  }
 }
