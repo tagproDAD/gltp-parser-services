@@ -13,6 +13,41 @@ let cachedWRs = null;
 let lastFetch = 0;
 const CACHE_TTL = 10 * 60 * 1000; // 5 minutes in memory
 
+/**
+ * Check if a TagPro replay is ready by fetching the replay data API
+ * Returns true if replay exists, false if not found
+ */
+async function isReplayReady(uuid) {
+    try {
+        const url = `https://tagpro.koalabeast.com/replays/data?uuid=${uuid}`;
+        const response = await fetch(url, {
+            method: "GET",
+            headers: {
+                "User-Agent": "GLTP-Bot/1.0"
+            }
+        });
+        
+        if (!response.ok) {
+            console.log(`Replay check failed for ${uuid}: HTTP ${response.status}`);
+            return false;
+        }
+        
+        const data = await response.json();
+        
+        // Check if games array is empty
+        if (!data.games || data.games.length === 0) {
+            console.log(`Replay not ready yet for ${uuid} (empty games array)`);
+            return false;
+        }
+        
+        console.log(`Replay appears ready for ${uuid} (${data.games.length} game(s) found)`);
+        return true;
+    } catch (err) {
+        console.error(`Error checking replay for ${uuid}:`, err);
+        return false; // Assume not ready on error, will retry later
+    }
+}
+
 export default {
     async fetch(request, env, ctx) {
         try {
@@ -169,7 +204,7 @@ export default {
                     response = new Response(JSON.stringify(wrs), {
                     headers: {
                         "Content-Type": "application/json",
-                        "Cache-Control": "s-maxage=900" // 15 minutes at edge
+                        "Cache-Control": "s-maxage=600" // 10 minutes at edge
                     }
                     });
                     await cache.put(request, response.clone());
@@ -482,6 +517,7 @@ export default {
                 const value = JSON.stringify({
                     origin: origin || "Unknown cloudflare",
                     timestamp: Date.now(),
+                    retryCount: 0
                 });
 
                 try {
@@ -507,26 +543,53 @@ export default {
 
         // Batch size to avoid overloading
         const batch = list.keys.slice(0, 20);
+        
+        const MAX_RETRIES = 10; // Maximum retry attempts before giving up
+        const MAX_AGE = 0.5 * 24 * 60 * 60 * 1000; // 0.5 days in milliseconds
 
         for (const entry of batch) {
             const dataRaw = await env.DELAYED_REPLAYS.get(entry.name);
             if (!dataRaw) continue;
 
             const data = JSON.parse(dataRaw);
-            // makes sure uuid is 65 minutes old
-            if (now - data.timestamp >= 65 * 60 * 1000) {
-                const uuid = entry.name.replace("uuid:", "");
+            const uuid = entry.name.replace("uuid:", "");
+            const age = now - data.timestamp;
+            const retryCount = data.retryCount || 0;
 
-                // Queue background work without blocking the scheduled handler
-                ctx.waitUntil(
-                    (async () => {
+            // Skip if too old or too many retries
+            if (age > MAX_AGE || retryCount > MAX_RETRIES) {
+                console.log(`Giving up on UUID ${uuid} (age: ${age}ms, retries: ${retryCount})`);
+                await env.DELAYED_REPLAYS.delete(entry.name);
+                await insertError(env.DB, uuid, `Abandoned after ${retryCount} retries over ${Math.round(age / 1000 / 60)} minutes`);
+                continue;
+            }
+
+            // Queue background work without blocking the scheduled handler
+            ctx.waitUntil(
+                (async () => {
                     try {
-                        // Instead of external fetch, call our own handler directly
+                        // First, check if the replay is ready
+                        const replayReady = await isReplayReady(uuid);
+                        
+                        if (!replayReady) {
+                            console.log(`Replay not ready for ${uuid}, incrementing retry count (${retryCount + 1})`);
+                            // Update retry count and leave in queue
+                            await env.DELAYED_REPLAYS.put(entry.name, JSON.stringify({
+                                ...data,
+                                retryCount: retryCount + 1,
+                                lastAttempt: now
+                            }));
+                            return;
+                        }
+
+                        console.log(`Replay ready for ${uuid}, processing...`);
+                        
+                        // Replay is ready, proceed with parsing
                         const body = { input: uuid, origin: data.origin };
                         const request = new Request("https://internal/parse", {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify(body),
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify(body),
                         });
 
                         const res = await this.fetch(request, env, ctx);
@@ -535,21 +598,49 @@ export default {
                         let parsed;
                         try {
                             parsed = JSON.parse(text);
-                            console.log("Processed delayed UUID via /parse:", uuid, parsed);
-                            // Remove from KV after successful processing
-                            await env.DELAYED_REPLAYS.delete(entry.name);
+                            
+                            // Check if parsing was successful
+                            if (parsed.ok && parsed.upload && parsed.upload.status === 201) {
+                                console.log(`✅ Successfully processed delayed UUID: ${uuid}`, parsed);
+                                // Remove from KV after successful processing
+                                await env.DELAYED_REPLAYS.delete(entry.name);
+                            } else {
+                                console.log(`⚠️ Parse completed but upload failed for ${uuid}:`, parsed);
+                                // Increment retry count for non-fatal errors
+                                await env.DELAYED_REPLAYS.put(entry.name, JSON.stringify({
+                                    ...data,
+                                    retryCount: retryCount + 1,
+                                    lastAttempt: now,
+                                    lastError: parsed.error || 'Upload failed'
+                                }));
+                            }
                         } catch {
                             parsed = { ok: false, error: text };
-                            console.log("failed delayed uuid via /parse:", uuid, parsed);
-                            // leave in KV for retry
+                            console.log(`❌ Failed to parse response for ${uuid}:`, parsed);
+                            // Increment retry count
+                            await env.DELAYED_REPLAYS.put(entry.name, JSON.stringify({
+                                ...data,
+                                retryCount: retryCount + 1,
+                                lastAttempt: now,
+                                lastError: text
+                            }));
                         }
                     } catch (err) {
-                        console.error("Error processing delayed UUID:", uuid, err);
-                        // leave in KV for retry next cron run
+                        console.error(`❌ Error processing delayed UUID ${uuid}:`, err);
+                        // Increment retry count on error
+                        try {
+                            await env.DELAYED_REPLAYS.put(entry.name, JSON.stringify({
+                                ...data,
+                                retryCount: retryCount + 1,
+                                lastAttempt: now,
+                                lastError: err.message
+                            }));
+                        } catch (kvErr) {
+                            console.error(`Failed to update KV for ${uuid}:`, kvErr);
+                        }
                     }
-                    })()
-                );
-            }
+                })()
+            );
         }
     }
 

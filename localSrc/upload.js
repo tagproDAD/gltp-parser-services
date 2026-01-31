@@ -47,7 +47,7 @@ async function parseWithVercel(uuid) {
     }
 
     console.log(`✅ Parsed ${uuid}`);
-    console.log(JSON.stringify(parsed, null, 2));
+    //console.log(JSON.stringify(parsed, null, 2));
     return parsed;
   } catch (err) {
     console.error(`❌ Request to Vercel failed for ${uuid}:`, err);
@@ -181,7 +181,7 @@ async function runParseVercel() {
     const parsed = await parseWithVercel(uuid);
     if (parsed) results.push(parsed);
 
-    await sleep(2000);
+    await sleep(200);
   }
 
   fs.writeFileSync("parsed-results.json", JSON.stringify(results, null, 2));
@@ -250,9 +250,9 @@ async function runErrorCheck() {
 
 // Function to extract just UUIDs from main json format and save them to a new file
 function extractUuids() {
-  const records = JSON.parse(fs.readFileSync('recordsOld.json', 'utf8'));
+  const records = JSON.parse(fs.readFileSync('all-records1-17-26.json', 'utf8'));
   const uuids = records.map(record => ({ uuid: record.uuid }));
-  fs.writeFileSync('uuids1.json', JSON.stringify(uuids, null, 2));
+  fs.writeFileSync('uuidsSanitized.json', JSON.stringify(uuids, null, 2));
   console.log('🎉 UUIDs extracted and saved to uuids.json');
 }
 
@@ -290,98 +290,206 @@ function sanitizeUuids() {
 }
 
 //deep compares too arrays of records for matching data
+//deep compares two arrays of records for matching data
 function compareData() {
-  const fileAPath = "oldRecords.json";
-  const fileBPath = "currentRecords.json";
+  const fileBPath = "all-records1-17-26.json";
+  const fileAPath = "parsed-results-compare.json";
+  const worldRecordsPath = "world-records.json";
 
-// Load files
-const fileA = JSON.parse(fs.readFileSync(fileAPath, "utf8"));
-const fileB = JSON.parse(fs.readFileSync(fileBPath, "utf8"));
+  // Load files
+  const fileA = JSON.parse(fs.readFileSync(fileAPath, "utf8"));
+  const fileB = JSON.parse(fs.readFileSync(fileBPath, "utf8"));
+  const worldRecords = JSON.parse(fs.readFileSync(worldRecordsPath, "utf8"));
 
-// Map B by UUID for fast lookup
-const bMap = new Map(fileB.map(r => [r.uuid, r]));
-
-// Helper: deep compare and collect differences
-function diffFields(a, b, path = "") {
-  const diffs = [];
-
-  // Ignore the 'preset' field
-  if (path && path.endsWith(".preset")) {
-    return diffs;
-  }
-
-  if (typeof a !== "object" || a === null) {
-    if (a !== b) {
-      diffs.push({ path, expected: a, found: b });
+  // Helper to extract record from either format
+  function extractRecord(item) {
+    // If it has a 'record' property, it's wrapped
+    if (item.record) {
+      return item.record;
     }
-    return diffs;
+    // Otherwise it's already a record
+    return item;
   }
 
-  if (Array.isArray(a)) {
-    if (!Array.isArray(b)) {
-      diffs.push({ path, expected: a, found: b });
+  // Map B by UUID for fast lookup
+  const bMap = new Map(fileB.map(item => {
+    const record = extractRecord(item);
+    return [record.uuid, record];
+  }));
+
+  // Helper: deep compare and collect differences
+  function diffFields(a, b, path = "") {
+    const diffs = [];
+
+    // Ignore the 'preset' field
+    if (path && path.endsWith(".preset")) {
       return diffs;
     }
 
-    // Compare arrays order-insensitively
-    const unmatched = [...b];
-    for (const [i, itemA] of a.entries()) {
-      const index = unmatched.findIndex(itemB => diffFields(itemA, itemB).length === 0);
-      if (index === -1) {
-        diffs.push({ path: `${path}[${i}]`, expected: itemA, found: null });
+    if (typeof a !== "object" || a === null || typeof b !== "object" || b === null) {
+      if (a !== b) {
+        diffs.push({ path, expected: a, found: b });
+      }
+      return diffs;
+    }
+
+    if (Array.isArray(a)) {
+      if (!Array.isArray(b)) {
+        diffs.push({ path, expected: a, found: b });
+        return diffs;
+      }
+
+      // Compare arrays order-insensitively
+      const unmatchedB = [...b];
+      const unmatchedA = [];
+      
+      for (const [i, itemA] of a.entries()) {
+        const index = unmatchedB.findIndex(itemB => {
+          const itemDiffs = diffFields(itemA, itemB, "");
+          return itemDiffs.length === 0;
+        });
+        
+        if (index === -1) {
+          unmatchedA.push({ index: i, item: itemA });
+        } else {
+          unmatchedB.splice(index, 1);
+        }
+      }
+      
+      // Report unmatched items from A
+      for (const unmatched of unmatchedA) {
+        diffs.push({ path: `${path}[${unmatched.index}]`, expected: unmatched.item, found: "no match in array" });
+      }
+      
+      // Report extra items in B
+      for (const extraB of unmatchedB) {
+        diffs.push({ path: `${path}[extra]`, expected: "not in A", found: extraB });
+      }
+      
+      return diffs;
+    }
+
+    // Object comparison
+    for (const key of Object.keys(a)) {
+      if (key === "preset" || key === "is_racing_mode" || key === "origin" || key === "timestamp_uploaded" || key === "allow_blue_caps") {
+        continue;
+      }
+
+      if (!(key in b)) {
+        diffs.push({ path: path ? `${path}.${key}` : key, expected: a[key], found: undefined });
       } else {
-        unmatched.splice(index, 1);
+        diffs.push(...diffFields(a[key], b[key], path ? `${path}.${key}` : key));
       }
     }
+    
+    // Check for keys in b that aren't in a
+    for (const key of Object.keys(b)) {
+      if (key === "preset" || key === "is_racing_mode" || key === "origin" || key === "timestamp_uploaded" || key === "allow_blue_caps") {
+        continue;
+      }
+      if (!(key in a)) {
+        diffs.push({ path: path ? `${path}.${key}` : key, expected: undefined, found: b[key] });
+      }
+    }
+
     return diffs;
   }
 
-  // Object comparison
-  for (const key of Object.keys(a)) {
-    if (key === "preset") {
-      continue; // Skip comparing the 'preset' field
-    }
-
-    if (!(key in b)) {
-      diffs.push({ path: path ? `${path}.${key}` : key, expected: a[key], found: undefined });
+  // Check each record in A
+  const mismatched = [];
+  const mapNames = new Set();
+  const mapIDs = new Set();
+  fileA.forEach(itemA => {
+    const recordA = extractRecord(itemA);
+    const recordB = bMap.get(recordA.uuid);
+    
+    if (!recordB) {
+      mismatched.push({ uuid: recordA.uuid, reason: "Missing in B" });
     } else {
-      diffs.push(...diffFields(a[key], b[key], path ? `${path}.${key}` : key));
+      const diffs = diffFields(recordA, recordB);
+      if (diffs.length > 0) {
+        mapNames.add(recordA.map_name);
+        mapIDs.add(recordA.map_id);
+        mismatched.push({ uuid: recordA.uuid, reason: "Fields mismatch", diffs });
+      }
     }
-  }
+  });
 
-  return diffs;
-}
-
-// Check each record in A
-const mismatched = [];
-fileA.forEach(recordA => {
-  const recordB = bMap.get(recordA.uuid);
-  if (!recordB) {
-    mismatched.push({ uuid: recordA.uuid, reason: "Missing in B" });
+  // Output result
+  if (mismatched.length === 0) {
+    console.log("✅ All records in File A exist in File B with matching fields (ignoring 'preset')");
   } else {
-    const diffs = diffFields(recordA, recordB);
-    if (diffs.length > 0) {
-      mismatched.push({ uuid: recordA.uuid, reason: "Fields mismatch", diffs });
-    }
+    console.log(`❌ ${mismatched.length} records mismatch:`);
+    mismatched.forEach(m => {
+      console.log(`\nUUID: ${m.uuid} - ${m.reason}`);
+      if (m.diffs) {
+        m.diffs.forEach(d => {
+          console.log(`  Field: ${d.path}`);
+          console.log(`    Expected: ${JSON.stringify(d.expected)}`);
+          console.log(`    Found:    ${JSON.stringify(d.found)}`);
+        });
+      }
+    });
   }
-});
 
-// Output result
-if (mismatched.length === 0) {
-  console.log("✅ All records in File A exist in File B with matching fields (ignoring 'preset')");
-} else {
-  console.log(`❌ ${mismatched.length} records mismatch:`);
-  mismatched.forEach(m => {
-    console.log(`\nUUID: ${m.uuid} - ${m.reason}`);
-    if (m.diffs) {
-      m.diffs.forEach(d => {
-        console.log(`  Field: ${d.path}`);
-        console.log(`    Expected: ${JSON.stringify(d.expected)}`);
-        console.log(`    Found:    ${JSON.stringify(d.found)}`);
+  // ⭐ Final unique map names
+  console.log("\n🗺️ Unique map names with mismatches:");
+  console.log([...mapNames]);
+
+  const brokenRecords = [];
+
+  fileA.forEach(itemA => {
+    const recordA = extractRecord(itemA);
+    const mapId = String(recordA.map_id);
+
+    if (!mapIDs.has(mapId)) return;
+
+    const wr = worldRecords[mapId];
+    if (!wr) return;
+
+    const beatsTime =
+      typeof recordA.record_time === "number" &&
+      recordA.record_time < wr.fastestTime;
+
+    const beatsJumps =
+      typeof recordA.total_jumps === "number" &&
+      recordA.total_jumps < wr.minJumps;
+
+    if (beatsTime || beatsJumps) {
+      brokenRecords.push({
+        map_id: mapId,
+        map_name: wr.map_name,
+        uuid: recordA.uuid,
+        record_time: recordA.record_time,
+        fastestTime: wr.fastestTime,
+        total_jumps: recordA.total_jumps,
+        minJumps: wr.minJumps,
+        beats: {
+          time: beatsTime,
+          jumps: beatsJumps
+        }
       });
     }
   });
-}
+
+  if (brokenRecords.length === 0) {
+    console.log("🏁 No world records beaten.");
+  } else {
+    console.log(`🔥 ${brokenRecords.length} potential world records found:`);
+
+    brokenRecords.forEach(r => {
+      console.log(`\n🗺️ ${r.map_name} (ID: ${r.map_id})`);
+      console.log(`UUID: ${r.uuid}`);
+
+      if (r.beats.time) {
+        console.log(`⏱️ Time: ${r.record_time} < ${r.fastestTime}`);
+      }
+      if (r.beats.jumps) {
+        console.log(`🦘 Jumps: ${r.total_jumps} < ${r.minJumps}`);
+      }
+    });
+  }
+
 
 }
 
@@ -430,7 +538,7 @@ async function runPipeline() {
 // Entry point: choose mode based on CLI parameter
 const mode = process.argv[2];
 if (mode === "parse") {
-  runParse();
+    runParse();
 } else if (mode === "parseVercel") {
     runParseVercel();
 } else if (mode === "check") {
@@ -448,9 +556,9 @@ if (mode === "parse") {
 } else if (mode === "delete") {
     runDelete();
 } else if (mode === "pipeline") {
-  runPipeline();
+    runPipeline();
 } else if (mode === "delay") {
-  testDelayedUpload();
+    testDelayedUpload();
 } else {
   console.log("Usage: node script.js [parse|check|checkErrors|extract|sanitize|compare]");
 } 

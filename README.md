@@ -38,7 +38,7 @@ Cloudflare Worker (queue request)
 Cloudflare KV (DELAYED_REPLAYS)
    ↓ (cron job every 15 minutes)
 Cloudflare Worker (scheduled handler)
-   ↓ (forward to parser once ≥65 minutes old)
+   ↓ (forward to parser once with retries)
 Vercel Parser (business logic)
    ↓ (fetch replay data from tagpro and parse)
 Cloudflare Worker (validation + routing)
@@ -132,8 +132,9 @@ Features:
 
 ### Cloudflare Worker
 - Install Wrangler: `npm install -g wrangler`
-- Run locally: `wrangler dev`
+- Run locally: `wrangler dev worker.js`
 - Deploy: `wrangler publish`
+- Logs: `wrangler tail gltp`
 - Test:
   ```bash
   curl -X POST http://localhost:8787/parse \
