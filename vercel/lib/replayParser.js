@@ -210,9 +210,9 @@ function getDetails(replay, maps) {
         // BUT only after game has started
         if (
           allowFromSpawn &&
-          ts >= firstTimerTs &&  // ← Add this check
+          ts >= firstTimerTs &&
           pd.directSet === true &&
-          pd.dead === false
+          (pd.dead === false || pd["s-pops"] !== undefined)
         ) {
           runStartTsBySession.set(sid, ts);
         }

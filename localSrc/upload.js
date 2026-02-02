@@ -303,11 +303,9 @@ function compareData() {
 
   // Helper to extract record from either format
   function extractRecord(item) {
-    // If it has a 'record' property, it's wrapped
     if (item.record) {
       return item.record;
     }
-    // Otherwise it's already a record
     return item;
   }
 
@@ -321,7 +319,6 @@ function compareData() {
   function diffFields(a, b, path = "") {
     const diffs = [];
 
-    // Ignore the 'preset' field
     if (path && path.endsWith(".preset")) {
       return diffs;
     }
@@ -339,7 +336,6 @@ function compareData() {
         return diffs;
       }
 
-      // Compare arrays order-insensitively
       const unmatchedB = [...b];
       const unmatchedA = [];
       
@@ -356,12 +352,10 @@ function compareData() {
         }
       }
       
-      // Report unmatched items from A
       for (const unmatched of unmatchedA) {
         diffs.push({ path: `${path}[${unmatched.index}]`, expected: unmatched.item, found: "no match in array" });
       }
       
-      // Report extra items in B
       for (const extraB of unmatchedB) {
         diffs.push({ path: `${path}[extra]`, expected: "not in A", found: extraB });
       }
@@ -382,7 +376,6 @@ function compareData() {
       }
     }
     
-    // Check for keys in b that aren't in a
     for (const key of Object.keys(b)) {
       if (key === "preset" || key === "is_racing_mode" || key === "origin" || key === "timestamp_uploaded" || key === "allow_blue_caps") {
         continue;
@@ -399,6 +392,8 @@ function compareData() {
   const mismatched = [];
   const mapNames = new Set();
   const mapIDs = new Set();
+  const recordsToUpdate = [];
+
   fileA.forEach(itemA => {
     const recordA = extractRecord(itemA);
     const recordB = bMap.get(recordA.uuid);
@@ -410,32 +405,109 @@ function compareData() {
       if (diffs.length > 0) {
         mapNames.add(recordA.map_name);
         mapIDs.add(recordA.map_id);
-        mismatched.push({ uuid: recordA.uuid, reason: "Fields mismatch", diffs });
+        mismatched.push({ 
+          uuid: recordA.uuid, 
+          map_name: recordA.map_name,
+          reason: "Fields mismatch", 
+          diffs,
+          recordA,
+          recordB 
+        });
+
+        // Track updates needed for record_time and total_jumps
+        const updates = {};
+        if (recordA.record_time !== recordB.record_time) {
+          updates.record_time = { from: recordB.record_time, to: recordA.record_time };
+        }
+        if (recordA.total_jumps !== recordB.total_jumps) {
+          updates.total_jumps = { from: recordB.total_jumps, to: recordA.total_jumps };
+        }
+
+        if (Object.keys(updates).length > 0) {
+          recordsToUpdate.push({
+            uuid: recordA.uuid,
+            map_name: recordA.map_name,
+            updates,
+            fullRecordA: recordA
+          });
+        }
       }
     }
   });
 
-  // Output result
-  if (mismatched.length === 0) {
-    console.log("✅ All records in File A exist in File B with matching fields (ignoring 'preset')");
-  } else {
-    console.log(`❌ ${mismatched.length} records mismatch:`);
-    mismatched.forEach(m => {
-      console.log(`\nUUID: ${m.uuid} - ${m.reason}`);
-      if (m.diffs) {
-        m.diffs.forEach(d => {
-          console.log(`  Field: ${d.path}`);
-          console.log(`    Expected: ${JSON.stringify(d.expected)}`);
-          console.log(`    Found:    ${JSON.stringify(d.found)}`);
-        });
+  // Write detailed mismatch report to file
+  const reportData = {
+    summary: {
+      total_mismatches: mismatched.length,
+      unique_maps: [...mapNames],
+      unique_map_ids: [...mapIDs],
+      records_needing_updates: recordsToUpdate.length
+    },
+    mismatches: mismatched,
+    updates: recordsToUpdate
+  };
+
+  fs.writeFileSync("mismatch-report.json", JSON.stringify(reportData, null, 2));
+  console.log("📝 Detailed report written to mismatch-report.json");
+
+  // Generate SQL UPDATE statements
+  if (recordsToUpdate.length > 0) {
+    const sqlStatements = [];
+    
+    recordsToUpdate.forEach(rec => {
+      const setClauses = [];
+      const changes = [];
+
+      if (rec.updates.record_time) {
+        setClauses.push(`record_time = ${rec.updates.record_time.to}`);
+        changes.push(`record_time: ${rec.updates.record_time.from} → ${rec.updates.record_time.to}`);
       }
+
+      if (rec.updates.total_jumps) {
+        setClauses.push(`total_jumps = ${rec.updates.total_jumps.to}`);
+        changes.push(`total_jumps: ${rec.updates.total_jumps.from} → ${rec.updates.total_jumps.to}`);
+      }
+
+      // Update the JSON payload using JSON_SET to only modify specific fields
+      const jsonUpdates = [];
+      if (rec.updates.record_time) {
+        jsonUpdates.push(`'$.record_time', ${rec.updates.record_time.to}`);
+      }
+      if (rec.updates.total_jumps) {
+        jsonUpdates.push(`'$.total_jumps', ${rec.updates.total_jumps.to}`);
+      }
+
+      if (jsonUpdates.length > 0) {
+        setClauses.push(`payload = JSON_SET(payload, ${jsonUpdates.join(', ')})`);
+      }
+
+      const sql = `-- ${rec.map_name} | ${changes.join(', ')}\nUPDATE gltp_records SET ${setClauses.join(', ')} WHERE uuid = '${rec.uuid}';`;
+      sqlStatements.push(sql);
     });
+
+    const sqlContent = `-- Generated SQL UPDATE statements
+  -- Total records to update: ${recordsToUpdate.length}
+  -- Generated: ${new Date().toISOString()}
+
+  ${sqlStatements.join('\n\n')}
+  `;
+
+    fs.writeFileSync("update-records.sql", sqlContent);
+    console.log("📄 SQL statements written to update-records.sql");
+    console.log(`🔧 ${recordsToUpdate.length} records need updates`);
   }
 
-  // ⭐ Final unique map names
+  // Output console summary
+  if (mismatched.length === 0) {
+    console.log("✅ All records in File A exist in File B with matching fields");
+  } else {
+    console.log(`❌ ${mismatched.length} records mismatch`);
+  }
+
   console.log("\n🗺️ Unique map names with mismatches:");
   console.log([...mapNames]);
 
+  // World records check
   const brokenRecords = [];
 
   fileA.forEach(itemA => {
@@ -473,9 +545,9 @@ function compareData() {
   });
 
   if (brokenRecords.length === 0) {
-    console.log("🏁 No world records beaten.");
+    console.log("\n🏁 No world records beaten.");
   } else {
-    console.log(`🔥 ${brokenRecords.length} potential world records found:`);
+    console.log(`\n🔥 ${brokenRecords.length} potential world records found:`);
 
     brokenRecords.forEach(r => {
       console.log(`\n🗺️ ${r.map_name} (ID: ${r.map_id})`);
@@ -489,8 +561,6 @@ function compareData() {
       }
     });
   }
-
-
 }
 
 // New pipeline mode
