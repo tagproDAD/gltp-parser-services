@@ -221,12 +221,29 @@ export default {
 
             // GET /records
             if (request.method === "GET" && path === "/records") {
-            const rows = await env.DB.prepare("SELECT payload FROM gltp_records").all();
-            const arr = (rows.results || []).map(r => {
-                try { return JSON.parse(r.payload); } catch { return r.payload; }
-            });
-            return jsonResponse(arr);
-            }
+                // Check cache first
+                const cache = caches.default;
+                let response = await cache.match(request);
+                if (response) return response;
+                // Cache miss - do the expensive work
+                const rows = await env.DB.prepare("SELECT payload FROM gltp_records").all();
+                const arr = (rows.results || []).map(r => {
+                    try { return JSON.parse(r.payload); } catch { return r.payload; }
+                });
+
+                // Cache for 5 minutes WITH CORS headers
+                response = new Response(JSON.stringify(arr), {
+                    headers: {
+                    "Content-Type": "application/json",
+                    "Cache-Control": "s-maxage=300",
+                    "Access-Control-Allow-Origin": "*",  // ADD THIS
+                    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",  // ADD THIS
+                    "Access-Control-Allow-Headers": "Content-Type"  // ADD THIS
+                    }
+                });
+                ctx.waitUntil(cache.put(request, response.clone()));
+                return response;
+                }
 
             // GET /incomplete-records
             if (request.method === "GET" && path === "/incomplete-records") {
